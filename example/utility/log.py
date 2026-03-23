@@ -65,12 +65,13 @@ class Log:
 
     def _train_step(self, model, loss, accuracy, learning_rate: float) -> None:
         self.learning_rate = learning_rate
+        batch_steps = int(accuracy.numel())
         self.last_steps_state["loss"] += loss.sum().item()
         self.last_steps_state["accuracy"] += accuracy.sum().item()
-        self.last_steps_state["steps"] += loss.size(0)
+        self.last_steps_state["steps"] += batch_steps
         self.epoch_state["loss"] += loss.sum().item()
         self.epoch_state["accuracy"] += accuracy.sum().item()
-        self.epoch_state["steps"] += loss.size(0)
+        self.epoch_state["steps"] += batch_steps
         self.step += 1
 
         if self.step % self.log_each == self.log_each - 1:
@@ -85,9 +86,10 @@ class Log:
             )
 
     def _eval_step(self, loss, accuracy) -> None:
+        batch_steps = int(accuracy.numel())
         self.epoch_state["loss"] += loss.sum().item()
         self.epoch_state["accuracy"] += accuracy.sum().item()
-        self.epoch_state["steps"] += loss.size(0)
+        self.epoch_state["steps"] += batch_steps
 
     def _reset(self, len_dataset: int) -> None:
         self.start_time = time.time()
