@@ -129,4 +129,8 @@ dmypy.json
 .pyre/
 
 cifar/
-data/
+# Ignore only the repository-root dataset directory
+/data/
+# Keep example code under example/data tracked
+!/example/data/
+!/example/data/**
