@@ -16,13 +16,13 @@ class Cifar:
         mean, std = self._get_statistics(dataset_class)
         #自动计算数据集的均值（mean）和标准差（std），用于后面的 Normalize 标准化
 
-        #数据增强||经典 CIFAR-10 baseline augmentation
+        #数据增强||经典 CIFAR-10 baseline augmentation: RandomCrop + RandomHorizontalFlip + Cutout
         train_transform = transforms.Compose([
-            torchvision.transforms.RandomCrop(size=(32, 32), padding=4),
-            torchvision.transforms.RandomHorizontalFlip(),
+            torchvision.transforms.RandomCrop(size=(32, 32), padding=4),#随机裁剪图像，裁剪前先在图像周围添加4像素的零填充（padding=4），然后从中随机裁剪出一个32x32的图像
+            torchvision.transforms.RandomHorizontalFlip(),#随机水平翻转图像
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
-            Cutout()
+            Cutout()#（随机遮挡图像的一部分方块）
         ])
 
         test_transform = transforms.Compose([
