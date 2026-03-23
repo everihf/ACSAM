@@ -210,8 +210,8 @@ class ImageClassifier():
             #每个epoch结束后更新学习率（cosine下降），并评估训练集损失，训练时间
             self.lr_scheduler.step()
             self.logger.info(
-                '[%3d]  Train data = %6d  Train Acc = %.4f  Loss = %.4f  Time = %.2f'
-                % (epoch + 1, total, correct / total, train_loss / max(steps_done_epoch, 1), time.time() - t))
+                '[%3d]  Train data = %6d  Train batches = %4d  Train Acc = %.4f  Loss = %.4f  Time = %.2f'
+                % (epoch + 1, total, steps_done_epoch, correct / total, train_loss / max(steps_done_epoch, 1), time.time() - t))
 
             #验证集评估模型性能（每个epoch结束后），并保存最佳模型
             if (epoch + 1) % self.log_interval == 0:
