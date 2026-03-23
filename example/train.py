@@ -1,6 +1,7 @@
 import argparse
 import torch
 import logging
+import time
 from datetime import datetime
 from copy import deepcopy
 
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     train_start_time = datetime.now()
+    train_start_perf = time.perf_counter()
     log_filename = train_start_time.strftime("%m-%d_%H-%M.log")
     log_path = Path(__file__).resolve().parent / log_filename
     logging.basicConfig(
@@ -138,6 +140,7 @@ if __name__ == "__main__":
     scheduler = StepLR(optimizer, args.learning_rate, args.epochs)
 
     for epoch in range(args.epochs):
+        epoch_start_time = time.perf_counter()
         ###模型训练
         model.train()
         train_loader = dataset.train
@@ -224,4 +227,16 @@ if __name__ == "__main__":
                 correct = torch.argmax(predictions, 1) == targets
                 log(model, loss.cpu(), correct.cpu())
 
+        epoch_duration_seconds = time.perf_counter() - epoch_start_time
+        elapsed_since_start_seconds = time.perf_counter() - train_start_perf
+        logger.info(
+            "Epoch %d/%d finished in %.2f seconds (total elapsed: %.2f seconds)",
+            epoch + 1,
+            args.epochs,
+            epoch_duration_seconds,
+            elapsed_since_start_seconds,
+        )
+
     log.flush()#打印/冲洗 log
+    total_training_seconds = (datetime.now() - train_start_time).total_seconds()
+    logger.info("Training finished in %.2f seconds", total_training_seconds)
