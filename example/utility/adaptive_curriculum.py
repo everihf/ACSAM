@@ -104,7 +104,7 @@ class AdaptiveCurriculum:
     def current_epoch_size(self):
         # 训练集扩张公式：
         # epoch_size = N * min(pace_p * pace_q ^ floor(batch / pace_r), 1)
-        growth = self.pace_p * (self.pace_q ** int(math.floor(self.global_batch / self.pace_r)))
+        growth = self.pace_p * (self.pace_q ** int(math.floor(self.global_batch * (self.batch_size / 100) / self.pace_r)))
         return int(self.data_size * min(growth, 1.0))
 
     def build_dataloader(self, batch_size, num_workers, pin_memory):

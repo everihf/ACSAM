@@ -109,6 +109,7 @@ if __name__ == "__main__":
         else:
             logger.warning("No teacher checkpoint provided, using model initialization snapshot as teacher.")
 
+        #课程类的实例
         curriculum = AdaptiveCurriculum(
             # 数据仍使用原始 CIFAR 训练集；内部只会包装 index 供课程学习使用。
             train_dataset=dataset.train.dataset,
