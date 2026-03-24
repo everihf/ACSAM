@@ -152,6 +152,25 @@ if __name__ == "__main__":
     cumulative_batches = 0
     val_curve = []
 
+    metrics_dir = Path(__file__).resolve().parent / args.metrics_dir
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    default_method_name = args.optimizer
+    if args.optimizer == "sam" and args.adaptive:
+        default_method_name = "asam"
+    if args.use_adaptive_curriculum:
+        default_method_name = f"{default_method_name}+adaptive_curriculum"
+    method_name = args.method_name or default_method_name
+    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
+    csv_path = metrics_dir / f"{run_name}_val_curve.csv"
+    plot_path = metrics_dir / f"{run_name}_val_curve.png"
+
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+        )
+        writer.writeheader()
+
     for epoch in range(args.epochs):
         epoch_start_time = time.perf_counter()
         ###模型训练
@@ -166,6 +185,7 @@ if __name__ == "__main__":
             )
         log.train(len_dataset=len(train_loader))#载入训练集长度
 
+        epoch_batches = 0
         for batch in train_loader:
             if curriculum is not None:
                 inputs, targets, indices = batch
@@ -223,6 +243,7 @@ if __name__ == "__main__":
                 )
 
             cumulative_batches += 1
+            epoch_batches += 1
             with torch.no_grad():
                 correct = torch.argmax(predictions.data, 1) == targets
                 log(model, loss.cpu(), correct.cpu(), scheduler.lr())
@@ -233,6 +254,7 @@ if __name__ == "__main__":
         log.eval(len_dataset=len(dataset.test))
         eval_loss_sum = 0.0
         eval_steps = 0
+        eval_correct_sum = 0
 
         with torch.no_grad():
             for batch in dataset.test:
@@ -244,65 +266,57 @@ if __name__ == "__main__":
                 log(model, loss.cpu(), correct.cpu())
                 eval_loss_sum += loss.sum().item()
                 eval_steps += int(targets.numel())
+                eval_correct_sum += int(correct.sum().item())
 
         epoch_val_loss = eval_loss_sum / eval_steps if eval_steps > 0 else float("nan")
+        epoch_val_accuracy = eval_correct_sum / eval_steps if eval_steps > 0 else float("nan")
         val_curve.append(
             {
                 "epoch": epoch + 1,
                 "cumulative_batches": cumulative_batches,
-                "val_loss": epoch_val_loss,
+                "val_accuracy": epoch_val_accuracy,
             }
         )
-
-        epoch_duration_seconds = time.perf_counter() - epoch_start_time
-        elapsed_since_start_seconds = time.perf_counter() - train_start_perf
-        logger.info(
-            "Epoch %d/%d finished in %.2f seconds (total elapsed: %.2f seconds)",
-            epoch + 1,
-            args.epochs,
-            epoch_duration_seconds,
-            elapsed_since_start_seconds,
-        )
-
-    log.flush()#打印/冲洗 log
-    metrics_dir = Path(__file__).resolve().parent / args.metrics_dir
-    metrics_dir.mkdir(parents=True, exist_ok=True)
-    default_method_name = args.optimizer
-    if args.optimizer == "sam" and args.adaptive:
-        default_method_name = "asam"
-    if args.use_adaptive_curriculum:
-        default_method_name = f"{default_method_name}+adaptive_curriculum"
-    method_name = args.method_name or default_method_name
-    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
-    csv_path = metrics_dir / f"{run_name}_val_curve.csv"
-    plot_path = metrics_dir / f"{run_name}_val_curve.png"
-
-    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_loss"],
-        )
-        writer.writeheader()
-        for point in val_curve:
+        with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+            )
             writer.writerow(
                 {
                     "run_name": run_name,
                     "method": method_name,
-                    "epoch": point["epoch"],
-                    "cumulative_batches": point["cumulative_batches"],
-                    "val_loss": point["val_loss"],
+                    "epoch": epoch + 1,
+                    "cumulative_batches": cumulative_batches,
+                    "val_accuracy": epoch_val_accuracy,
                 }
             )
+
+        epoch_duration_seconds = time.perf_counter() - epoch_start_time
+        elapsed_since_start_seconds = time.perf_counter() - train_start_perf
+        logger.info(
+            "Epoch %d/%d finished in %.2f seconds (total elapsed: %.2f seconds), "
+            "epoch_batches=%d, val_accuracy=%.4f, val_loss=%.6f",
+            epoch + 1,
+            args.epochs,
+            epoch_duration_seconds,
+            elapsed_since_start_seconds,
+            epoch_batches,
+            epoch_val_accuracy,
+            epoch_val_loss,
+        )
+
+    log.flush()#打印/冲洗 log
     logger.info("Saved validation curve data to %s", csv_path)
 
     if plt is not None and len(val_curve) > 0:
         x = [point["cumulative_batches"] for point in val_curve]
-        y = [point["val_loss"] for point in val_curve]
+        y = [point["val_accuracy"] for point in val_curve]
         plt.figure(figsize=(8, 5))
         plt.plot(x, y, marker="o", linewidth=1.5)
         plt.xlabel("Cumulative Training Batches")
-        plt.ylabel("Validation Loss")
-        plt.title(f"Validation Loss Curve ({method_name})")
+        plt.ylabel("Validation Accuracy")
+        plt.title(f"Validation Accuracy Curve ({method_name})")
         plt.grid(alpha=0.3)
         plt.tight_layout()
         plt.savefig(plot_path, dpi=200)
