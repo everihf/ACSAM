@@ -86,6 +86,7 @@ class AdaptiveCurriculum:
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
+        self.batch_size=batch_size
 
         with torch.no_grad():
             for inputs, targets, indices in loader:
