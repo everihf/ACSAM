@@ -1,4 +1,6 @@
 import argparse
+import csv
+import importlib.util
 import torch
 import logging
 import time
@@ -22,6 +24,11 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 from sam import SAM
+
+if importlib.util.find_spec("matplotlib.pyplot") is not None:
+    import matplotlib.pyplot as plt
+else:
+    plt = None
 
 
 if __name__ == "__main__":
@@ -55,6 +62,10 @@ if __name__ == "__main__":
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
     parser.add_argument("--lambda1_decay", default=None, type=float, help="Optional decay step for lambda1 at each inv interval.")
     parser.add_argument("--bottom_lambda1", default=0.1, type=float, help="Lower bound of lambda1 when decay is enabled.")
+    # metrics
+    parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
+    parser.add_argument("--run_name", default="", type=str, help="Optional run name for metric filenames. If empty, auto-generate from timestamp.")
+    parser.add_argument("--method_name", default="", type=str, help="Method label saved into metrics CSV for later multi-run comparison.")
     #解析参数
     args = parser.parse_args()
 
@@ -139,6 +150,52 @@ if __name__ == "__main__":
         )
     scheduler = StepLR(optimizer, args.learning_rate, args.epochs)
 
+    metrics_dir = Path(__file__).resolve().parent / args.metrics_dir
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    default_method_name = args.optimizer
+    if args.optimizer == "sam" and args.adaptive:
+        default_method_name = "asam"
+    if args.use_adaptive_curriculum:
+        default_method_name = f"{default_method_name}+adaptive_curriculum"
+    method_name = args.method_name or default_method_name
+    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
+    csv_path = metrics_dir / f"{run_name}_val_curve.csv"
+    plot_path = metrics_dir / f"{run_name}_val_curve.png"
+
+    def persist_val_curve(curve):
+        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_loss"],
+            )
+            writer.writeheader()
+            for point in curve:
+                writer.writerow(
+                    {
+                        "run_name": run_name,
+                        "method": method_name,
+                        "epoch": point["epoch"],
+                        "cumulative_batches": point["cumulative_batches"],
+                        "val_loss": point["val_loss"],
+                    }
+                )
+
+        if plt is not None and len(curve) > 0:
+            x = [point["cumulative_batches"] for point in curve]
+            y = [point["val_loss"] for point in curve]
+            plt.figure(figsize=(8, 5))
+            plt.plot(x, y, marker="o", linewidth=1.5)
+            plt.xlabel("Cumulative Training Batches")
+            plt.ylabel("Validation Loss")
+            plt.title(f"Validation Loss Curve ({method_name})")
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=200)
+            plt.close()
+
+    cumulative_batches = 0
+    val_curve = []
+
     for epoch in range(args.epochs):
         epoch_start_time = time.perf_counter()
         ###模型训练
@@ -209,6 +266,7 @@ if __name__ == "__main__":
                     pin_memory=True,
                 )
 
+            cumulative_batches += 1
             with torch.no_grad():
                 correct = torch.argmax(predictions.data, 1) == targets
                 log(model, loss.cpu(), correct.cpu(), scheduler.lr())
@@ -217,6 +275,8 @@ if __name__ == "__main__":
         ###模型评估
         model.eval()
         log.eval(len_dataset=len(dataset.test))
+        eval_loss_sum = 0.0
+        eval_steps = 0
 
         with torch.no_grad():
             for batch in dataset.test:
@@ -226,6 +286,23 @@ if __name__ == "__main__":
                 loss = smooth_crossentropy(predictions, targets)
                 correct = torch.argmax(predictions, 1) == targets
                 log(model, loss.cpu(), correct.cpu())
+                eval_loss_sum += loss.sum().item()
+                eval_steps += int(targets.numel())
+
+        epoch_val_loss = eval_loss_sum / eval_steps if eval_steps > 0 else float("nan")
+        val_curve.append(
+            {
+                "epoch": epoch + 1,
+                "cumulative_batches": cumulative_batches,
+                "val_loss": epoch_val_loss,
+            }
+        )
+        persist_val_curve(val_curve)
+        logger.info("Saved validation curve data to %s", csv_path)
+        if plt is not None:
+            logger.info("Saved validation curve plot to %s", plot_path)
+        else:
+            logger.warning("matplotlib is not available; skipped saving validation curve plot.")
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
