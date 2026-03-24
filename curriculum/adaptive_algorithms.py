@@ -68,8 +68,9 @@ class Adaptive(BaseCL):
         
         #当课程已经扩展到全训练集(如 CIFAR-10 的 45000 样本)时，
         #跳过排序、Subset 构建和难度更新，直接返回完整训练集。
-        if self.epoch_size == self.data_size:
+        if self.epoch_size >= self.data_size:
             self.curriculum_finished = True
+            self.epoch_size=self.data_size
             dataloader = DataLoader(
                 self.dataset,
                 batch_size=loader.batch_size,
