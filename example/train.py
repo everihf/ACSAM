@@ -295,7 +295,7 @@ if __name__ == "__main__":
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
         logger.info(
-            "Epoch %d/%d finished in %.2f seconds (total elapsed: %.2f seconds), "
+            "Epoch %d/%d t: %.2fs  (T: %.2fs), "
             "epoch_batches=%d, val_accuracy=%.4f, val_loss=%.6f",
             epoch + 1,
             args.epochs,

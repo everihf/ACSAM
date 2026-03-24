@@ -62,7 +62,7 @@ class Adaptive(BaseCL):
 
         #训练集扩张公式
         self.epoch_size = self.data_size * min(
-            self.pace_p * (self.pace_q ** int(math.floor(self.batch / self.pace_r))),
+            self.pace_p * (self.pace_q ** int(math.floor(self.batch *(loader.batch_size/100)/ self.pace_r))),
             1)
         self.epoch_size = int(self.epoch_size)
         
