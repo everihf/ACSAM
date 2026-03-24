@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", default=200, type=int, help="Total number of epochs.")
     parser.add_argument("--label_smoothing", default=0.1, type=float, help="Use 0.0 for no label smoothing.")
     parser.add_argument("--learning_rate", default=0.1, type=float, help="Base learning rate at the start of the training.")
-    parser.add_argument("--momentum", default=0.9, type=float, help="SGD Momentum.")
+    parser.add_argument("--momentum", default=0.9, type=float, help="SGD Momentum.")#v ← μ * v + g, w ← w - lr * v ;g是当前梯度，v是动量，μ是动量系数;当前更新 = 当前梯度 + 过去梯度的累积
     parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # adaptive curriculum
