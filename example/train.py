@@ -65,8 +65,8 @@ if __name__ == "__main__":
     parser.add_argument("--bottom_lambda1", default=0.1, type=float, help="Lower bound of lambda1 when decay is enabled.")
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
-    parser.add_argument("--run_name", default="", type=str, help="Optional run name for metric filenames. If empty, auto-generate from timestamp.")
-    parser.add_argument("--method_name", default="", type=str, help="Method label saved into metrics CSV for later multi-run comparison.")
+    parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则根据时间戳自动生成。.")
+    parser.add_argument("--method_name", default="", type=str, help="方法标签已保存到指标CSV文件中，以便后续多轮比较.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
     parser.add_argument("--save_teacher_checkpoint", default=True, type=bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
@@ -113,7 +113,7 @@ if __name__ == "__main__":
             teacher_model.load_state_dict(teacher_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
-            teacher_model = pretrain_teacher_model(
+            teacher_model = pretrain_teacher_model(#训练教师模型，并返回
                 teacher_model=teacher_model,
                 train_loader=dataset.train,
                 test_loader=dataset.test,
@@ -121,9 +121,9 @@ if __name__ == "__main__":
                 device=device,
                 logger=logger,
             )
-            if args.save_teacher_checkpoint:
+            if args.save_teacher_checkpoint:#模型训练完再保存教师模型
                 teacher_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
-                torch.save(teacher_model.state_dict(), teacher_checkpoint_path)
+                torch.save(teacher_model.state_dict(), teacher_checkpoint_path)#.state_dict() = 模型所有可学习参数（权重）的字典
                 logger.info("Saved pretrained teacher checkpoint to %s", teacher_checkpoint_path)
 
         #课程类的实例
