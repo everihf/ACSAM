@@ -211,6 +211,7 @@ if __name__ == "__main__":
         )
         writer.writeheader()
 
+    train_start_perf = time.perf_counter()
     for epoch in range(args.epochs):
         epoch_start_time = time.perf_counter()
         ###模型训练
