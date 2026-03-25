@@ -150,6 +150,8 @@ if __name__ == "__main__":
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
     parser.add_argument("--run_name", default="", type=str, help="Optional run name for metric filenames. If empty, auto-generate from timestamp.")
     parser.add_argument("--method_name", default="", type=str, help="Method label saved into metrics CSV for later multi-run comparison.")
+    parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
+    parser.add_argument("--save_teacher_checkpoint", default=True, type=bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
     args = parser.parse_args()
 
@@ -169,6 +171,9 @@ if __name__ == "__main__":
 
     initialize(args, seed=42)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
+    checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
     log = Log(log_each=50, logger=logger)#每 50 个 step 打印一次训练中间结果
@@ -198,6 +203,10 @@ if __name__ == "__main__":
                 device=device,
                 logger=logger,
             )
+            if args.save_teacher_checkpoint:
+                teacher_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
+                torch.save(teacher_model.state_dict(), teacher_checkpoint_path)
+                logger.info("Saved pretrained teacher checkpoint to %s", teacher_checkpoint_path)
 
         #课程类的实例
         curriculum = AdaptiveCurriculum(
@@ -251,9 +260,10 @@ if __name__ == "__main__":
     if args.use_adaptive_curriculum:
         default_method_name = f"{default_method_name}+adaptive_curriculum"
     method_name = args.method_name or default_method_name
-    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
     csv_path = metrics_dir / f"{run_name}_val_curve.csv"
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
+    best_val_accuracy = float("-inf")
+    best_epoch = -1
 
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(
@@ -391,6 +401,16 @@ if __name__ == "__main__":
                 }
             )
 
+
+        if epoch_val_accuracy > best_val_accuracy:
+            best_val_accuracy = epoch_val_accuracy
+            best_epoch = epoch + 1
+            logger.info(
+                "New best validation accuracy at epoch %d: %.2f%%",
+                best_epoch,
+                best_val_accuracy * 100,
+            )
+
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
         logger.info(
@@ -426,3 +446,9 @@ if __name__ == "__main__":
 
     total_training_seconds = (datetime.now() - train_start_time).total_seconds()
     logger.info("Training finished in %.2f seconds", total_training_seconds)
+    if best_epoch > 0:
+        logger.info(
+            "Best validation accuracy: %.2f%% (epoch %d)",
+            best_val_accuracy * 100,
+            best_epoch,
+        )
