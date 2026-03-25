@@ -161,3 +161,18 @@ def pretrain_teacher_model(
             logger.info("Loaded teacher best checkpoint into model (epoch %d)", teacher_best_epoch)
     teacher_model.eval()
     return teacher_model
+
+
+def evaluate_accuracy(model: torch.nn.Module, data_loader, device: torch.device) -> float:
+    """Evaluate top-1 accuracy on a dataloader."""
+    model.eval()
+    correct_sum = 0
+    sample_sum = 0
+    with torch.no_grad():
+        for batch in data_loader:
+            inputs, targets = (b.to(device) for b in batch)
+            predictions = model(inputs)
+            correct = torch.argmax(predictions, 1) == targets
+            correct_sum += int(correct.sum().item())
+            sample_sum += int(targets.numel())
+    return (correct_sum / sample_sum) if sample_sum > 0 else float("nan")

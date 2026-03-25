@@ -16,6 +16,8 @@ from utility.step_lr import StepLR
 from utility.bypass_bn import enable_running_stats, disable_running_stats
 from utility.adaptive_curriculum import AdaptiveCurriculum
 from utility.teacher_model import pretrain_teacher_model
+from utility.teacher_model import evaluate_accuracy
+from utility.log import build_logger
 
 from pathlib import Path
 import sys
@@ -30,41 +32,6 @@ if importlib.util.find_spec("matplotlib.pyplot") is not None:
     import matplotlib.pyplot as plt
 else:
     plt = None
-
-
-def build_logger(name: str, log_path: Path) -> logging.Logger:
-    """Create an isolated logger that writes to its own file (and stdout)."""
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-
-    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
-    file_handler.setFormatter(formatter)
-
-    logger.handlers.clear()
-    logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
-    return logger
-
-
-def evaluate_accuracy(model: torch.nn.Module, data_loader, device: torch.device) -> float:
-    """Evaluate top-1 accuracy on a dataloader."""
-    model.eval()
-    correct_sum = 0
-    sample_sum = 0
-    with torch.no_grad():
-        for batch in data_loader:
-            inputs, targets = (b.to(device) for b in batch)
-            predictions = model(inputs)
-            correct = torch.argmax(predictions, 1) == targets
-            correct_sum += int(correct.sum().item())
-            sample_sum += int(targets.numel())
-    return (correct_sum / sample_sum) if sample_sum > 0 else float("nan")
 
 
 if __name__ == "__main__":
@@ -114,7 +81,7 @@ if __name__ == "__main__":
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
     student_log_path = Path(__file__).resolve().parent / f"{log_prefix}_student.log"
     logger = build_logger("train.student", student_log_path)
-    teacher_logger = logger
+
     logger.info("Student training log file: %s", student_log_path)
 
     initialize(args, seed=42)

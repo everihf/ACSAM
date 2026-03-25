@@ -1,6 +1,23 @@
 import time
 import logging
+def build_logger(name: str, log_path: Path) -> logging.Logger:
+    """Create an isolated logger that writes to its own file (and stdout)."""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    logger.handlers.clear()
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
+    return logger
 
 class Log:
     def __init__(self, log_each: int, initial_epoch=-1, logger=None):
