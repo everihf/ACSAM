@@ -31,6 +31,27 @@ if importlib.util.find_spec("matplotlib.pyplot") is not None:
 else:
     plt = None
 
+
+def build_logger(name: str, log_path: Path) -> logging.Logger:
+    """Create an isolated logger that writes to its own file (and stdout)."""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    logger.handlers.clear()
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
+    return logger
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -74,17 +95,11 @@ if __name__ == "__main__":
 
     train_start_time = datetime.now()
     train_start_perf = time.perf_counter()
-    log_filename = train_start_time.strftime("%m-%d_%H-%M.log")
-    log_path = Path(__file__).resolve().parent / log_filename
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler(log_path, mode="a", encoding="utf-8"),
-        ],
-    )
-    logger = logging.getLogger("train")
+    log_prefix = train_start_time.strftime("%m-%d_%H-%M")
+    student_log_path = Path(__file__).resolve().parent / f"{log_prefix}_student.log"
+    logger = build_logger("train.student", student_log_path)
+    teacher_logger = logger
+    logger.info("Student training log file: %s", student_log_path)
 
     initialize(args, seed=42)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -105,6 +120,10 @@ if __name__ == "__main__":
 
     curriculum = None
     if args.use_adaptive_curriculum:
+        teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
+        teacher_logger = build_logger("train.teacher", teacher_log_path)
+        logger.info("Teacher pretraining log file: %s", teacher_log_path)
+
         # 与原 SAM 代码保持一致：学生模型仍然是同一个 WideResNet，
         # 课程学习只是在数据采样和loss上做附加，不改模型定义。
         teacher_model = deepcopy(model)
@@ -120,7 +139,7 @@ if __name__ == "__main__":
                 test_loader=dataset.test,
                 args=args,
                 device=device,
-                logger=logger,
+                logger=teacher_logger,
                 best_checkpoint_path=teacher_best_checkpoint_path,
             )
             if args.save_teacher_checkpoint:#模型训练完再保存教师模型
