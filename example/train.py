@@ -31,6 +31,89 @@ else:
     plt = None
 
 
+def pretrain_teacher_model(teacher_model, train_loader, args, device, logger):
+    """Train a teacher from scratch when no checkpoint is provided."""
+    logger.info(
+        "No teacher checkpoint provided. Pretraining teacher for %d epochs with %s optimizer before adaptive curriculum.",
+        args.epochs,
+        args.teacher_optimizer.upper(),
+    )
+    if args.teacher_optimizer == "sam":
+        base_optimizer = torch.optim.SGD
+        optimizer = SAM(
+            teacher_model.parameters(),
+            base_optimizer,
+            rho=args.rho,
+            adaptive=args.adaptive,
+            lr=args.learning_rate,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        optimizer = torch.optim.SGD(
+            teacher_model.parameters(),
+            lr=args.learning_rate,
+            momentum=args.momentum,
+            weight_decay=args.weight_decay,
+        )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, args.epochs),
+    )
+
+    teacher_model.train()
+    for epoch in range(args.epochs):
+        epoch_loss_sum = 0.0
+        batch_count = 0
+        for inputs, targets in train_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            if args.teacher_optimizer == "sam":
+                enable_running_stats(teacher_model)
+                predictions = teacher_model(inputs)
+                loss = smooth_crossentropy(
+                    predictions,
+                    targets,
+                    smoothing=args.label_smoothing,
+                ).mean()
+                loss.backward()
+                optimizer.first_step(zero_grad=True)
+
+                disable_running_stats(teacher_model)
+                second_predictions = teacher_model(inputs)
+                second_loss = smooth_crossentropy(
+                    second_predictions,
+                    targets,
+                    smoothing=args.label_smoothing,
+                ).mean()
+                second_loss.backward()
+                optimizer.second_step(zero_grad=True)
+            else:
+                predictions = teacher_model(inputs)
+                loss = smooth_crossentropy(
+                    predictions,
+                    targets,
+                    smoothing=args.label_smoothing,
+                ).mean()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            epoch_loss_sum += loss.item()
+            batch_count += 1
+
+        scheduler.step()
+        avg_loss = epoch_loss_sum / batch_count if batch_count > 0 else float("nan")
+        logger.info(
+            "Teacher pretrain epoch %d/%d, avg_loss=%.6f",
+            epoch + 1,
+            args.epochs,
+            avg_loss,
+        )
+
+    teacher_model.eval()
+    return teacher_model
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -53,7 +136,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # adaptive curriculum
     parser.add_argument("--use_adaptive_curriculum", default=False, type=bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
-    parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, use the model initialization snapshot as teacher.")
+    parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
+    parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
     parser.add_argument("--pace_p", default=0.04, type=float, help="Initial curriculum ratio.")
     parser.add_argument("--pace_q", default=1.1, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
@@ -107,7 +191,13 @@ if __name__ == "__main__":
             teacher_model.load_state_dict(teacher_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
-            logger.warning("No teacher checkpoint provided, using model initialization snapshot as teacher.")
+            teacher_model = pretrain_teacher_model(
+                teacher_model=teacher_model,
+                train_loader=dataset.train,
+                args=args,
+                device=device,
+                logger=logger,
+            )
 
         #课程类的实例
         curriculum = AdaptiveCurriculum(
