@@ -2,7 +2,7 @@ import time
 import sys
 from pathlib import Path
 import torch
-from torch.optim.lr_scheduler import StepLR
+from utility.step_lr import StepLR
 from utility.log import Log
 # Ensure the repository root is importable when this module is loaded from example/train.py.
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -109,11 +109,13 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
         if epoch_val_accuracy > teacher_best_val_accuracy:
             teacher_best_val_accuracy = epoch_val_accuracy
             teacher_best_epoch = epoch + 1
-            logger.info(
+            if epoch_val_accuracy>0.95:
+                logger.info(
                 "Teacher pretrain new best validation accuracy at epoch %d: %.2f%%",
                 teacher_best_epoch,
                 teacher_best_val_accuracy * 100,
             )
+            
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         logger.info(

@@ -323,11 +323,11 @@ if __name__ == "__main__":
         if epoch_val_accuracy > best_val_accuracy:
             best_val_accuracy = epoch_val_accuracy
             best_epoch = epoch + 1
-            logger.info(
+            if best_val_accuracy>0.95:
+                logger.info(
                 "New best validation accuracy at epoch %d: %.2f%%",
                 best_epoch,
-                best_val_accuracy * 100,
-            )
+                best_val_accuracy * 100,)
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
