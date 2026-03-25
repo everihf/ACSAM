@@ -395,13 +395,13 @@ if __name__ == "__main__":
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
         logger.info(
             "Epoch %d/%d t: %.2fs  (T: %.2fs), "
-            "epoch_batches=%d, val_accuracy=%.4f, val_loss=%.6f",
+            "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
             epoch + 1,
             args.epochs,
             epoch_duration_seconds,
             elapsed_since_start_seconds,
             epoch_batches,
-            epoch_val_accuracy,
+            epoch_val_accuracy * 100,   # ⭐ 这里乘100
             epoch_val_loss,
         )
 
