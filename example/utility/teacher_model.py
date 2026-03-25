@@ -41,6 +41,7 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
     teacher_log = Log(log_each=50, logger=logger)
     teacher_best_val_accuracy = float("-inf")
     teacher_best_epoch = -1
+    pretrain_start_perf = time.perf_counter()
 
     for epoch in range(args.epochs):
         epoch_start_time = time.perf_counter()
@@ -118,12 +119,14 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
             
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
+        elapsed_since_start_seconds = time.perf_counter() - pretrain_start_perf
         logger.info(
-            "Teacher pretrain epoch %d/%d t: %.2fs, "
+            "Teacher pretrain epoch %d/%d t: %.2fs  (T: %.2fs), "
             "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
             epoch + 1,
             args.epochs,
             epoch_duration_seconds,
+            elapsed_since_start_seconds,
             epoch_batches,
             epoch_val_accuracy * 100,
             epoch_val_loss,
