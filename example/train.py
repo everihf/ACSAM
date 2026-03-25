@@ -143,9 +143,7 @@ if __name__ == "__main__":
                 best_checkpoint_path=teacher_best_checkpoint_path,
             )
             if args.save_teacher_checkpoint:#模型训练完再保存教师模型
-                teacher_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
-                torch.save(teacher_model.state_dict(), teacher_checkpoint_path)#.state_dict() = 模型所有可学习参数（权重）的字典
-                logger.info("Saved pretrained teacher checkpoint to %s", teacher_checkpoint_path)
+                logger.info("Saved pretrained teacher checkpoint to %s", teacher_best_checkpoint_path)
 
         #课程类的实例
         curriculum = AdaptiveCurriculum(
