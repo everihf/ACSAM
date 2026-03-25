@@ -113,6 +113,7 @@ if __name__ == "__main__":
             teacher_model.load_state_dict(teacher_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
+            teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_best.pt"
             teacher_model = pretrain_teacher_model(#训练教师模型，并返回
                 teacher_model=teacher_model,
                 train_loader=dataset.train,
@@ -120,6 +121,7 @@ if __name__ == "__main__":
                 args=args,
                 device=device,
                 logger=logger,
+                best_checkpoint_path=teacher_best_checkpoint_path,
             )
             if args.save_teacher_checkpoint:#模型训练完再保存教师模型
                 teacher_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
