@@ -73,6 +73,8 @@ class AdaptiveCurriculum:
         self.global_batch = 0
         self.pretrained_output = torch.zeros(self.data_size, num_classes, device=device)
         self.difficulty = torch.zeros(self.data_size, device=device)
+        self.curriculum_finished = False
+        self._full_loader = None
         self._initialized = False
 
     def initialize(self, batch_size, num_workers, pin_memory):
@@ -109,14 +111,18 @@ class AdaptiveCurriculum:
         return int(self.data_size * min(growth, 1.0))
 
     def build_dataloader(self, batch_size, num_workers, pin_memory):
+        if self.curriculum_finished:
+            return self.build_full_dataloader(batch_size, num_workers, pin_memory)
+
         epoch_size = max(1, self.current_epoch_size())
         if epoch_size >= self.data_size:
-            # 当课程扩张到全训练集后，退化为普通全量训练。
-            dataset = self.indexed_dataset
-        else:
-            # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
-            sorted_indices = torch.argsort(self.difficulty)
-            dataset = Subset(self.indexed_dataset, sorted_indices[:epoch_size].cpu())
+            # 当课程扩张到全训练集后，后续直接使用全量训练集，不再执行课程采样。
+            self.curriculum_finished = True
+            return self.build_full_dataloader(batch_size, num_workers, pin_memory)
+
+        # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
+        sorted_indices = torch.argsort(self.difficulty)
+        dataset = Subset(self.indexed_dataset, sorted_indices[:epoch_size].cpu())
 
         return DataLoader(
             dataset,
@@ -125,6 +131,17 @@ class AdaptiveCurriculum:
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
+
+    def build_full_dataloader(self, batch_size, num_workers, pin_memory):
+        if self._full_loader is None:
+            self._full_loader = DataLoader(
+                self.indexed_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
+        return self._full_loader
 
     def curriculum_loss(self, per_sample_losses, outputs, indices):
         # 基础监督损失（与原 SAM 训练一致：逐样本损失再求均值）。
@@ -141,6 +158,11 @@ class AdaptiveCurriculum:
 
     def update_after_batch(self, model, batch_size, num_workers, pin_memory):
         self.global_batch += 1
+
+        if self.curriculum_finished:
+            if self.global_batch % self.inv == 0 and self.lambda1_decay is not None:
+                self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
+            return
 
         # 更新难度：每隔 inv 个 batch，且达到 warmup（>500）后执行。
         should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > 500

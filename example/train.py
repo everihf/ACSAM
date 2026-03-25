@@ -178,12 +178,20 @@ if __name__ == "__main__":
         model.train()
         train_loader = dataset.train
         if curriculum is not None:
-            # 每个epoch按当前 difficulty/pace 重新构造课程子集。
-            train_loader = curriculum.build_dataloader(
-                batch_size=args.batch_size,
-                num_workers=args.num_workers,
-                pin_memory=True,
-            )
+            if curriculum.curriculum_finished:
+                # 课程扩张到全数据集后，跳过课程采样，直接用全数据集训练。
+                train_loader = curriculum.build_full_dataloader(
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                )
+            else:
+                # 每个epoch按当前 difficulty/pace 重新构造课程子集。
+                train_loader = curriculum.build_dataloader(
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                )
         log.train(len_dataset=len(train_loader))#载入训练集长度
 
         epoch_batches = 0
