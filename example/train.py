@@ -133,7 +133,7 @@ if __name__ == "__main__":
             teacher_model.load_state_dict(teacher_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
-            teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_best.pt"
+            teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
             teacher_model = pretrain_teacher_model(#训练教师模型，并返回
                 teacher_model=teacher_model,
                 train_loader=dataset.train,
