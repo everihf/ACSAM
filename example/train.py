@@ -88,7 +88,7 @@ if __name__ == "__main__":
 
     initialize(args, seed=42)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    run_name = args.run_name or train_start_time.strftime("%Y%m%d_%H%M%S")
+    run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 

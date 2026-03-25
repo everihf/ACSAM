@@ -134,3 +134,4 @@ cifar/
 # Keep example code under example/data tracked
 
 *.csv
+*.pt
