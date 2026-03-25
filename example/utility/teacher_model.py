@@ -1,7 +1,13 @@
 import time
+import sys
+from pathlib import Path
 import torch
 from torch.optim.lr_scheduler import StepLR
 from utility.log import Log
+# Ensure the repository root is importable when this module is loaded from example/train.py.
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 from sam import SAM
 from utility.bypass_bn import enable_running_stats, disable_running_stats
 from model.smooth_cross_entropy import smooth_crossentropy
