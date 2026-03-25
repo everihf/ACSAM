@@ -52,6 +52,21 @@ def build_logger(name: str, log_path: Path) -> logging.Logger:
     return logger
 
 
+def evaluate_accuracy(model: torch.nn.Module, data_loader, device: torch.device) -> float:
+    """Evaluate top-1 accuracy on a dataloader."""
+    model.eval()
+    correct_sum = 0
+    sample_sum = 0
+    with torch.no_grad():
+        for batch in data_loader:
+            inputs, targets = (b.to(device) for b in batch)
+            predictions = model(inputs)
+            correct = torch.argmax(predictions, 1) == targets
+            correct_sum += int(correct.sum().item())
+            sample_sum += int(targets.numel())
+    return (correct_sum / sample_sum) if sample_sum > 0 else float("nan")
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -145,6 +160,12 @@ if __name__ == "__main__":
             )
             if args.save_teacher_checkpoint:#模型训练完再保存教师模型
                 logger.info("Saved pretrained teacher checkpoint to %s", teacher_best_checkpoint_path)
+
+        teacher_val_accuracy = evaluate_accuracy(teacher_model, dataset.test, device)
+        logger.info(
+            "Teacher validation accuracy before student training: %.2f%%",
+            teacher_val_accuracy * 100,
+        )
 
         #课程类的实例
         curriculum = AdaptiveCurriculum(
