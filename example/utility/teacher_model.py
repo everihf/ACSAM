@@ -1,5 +1,6 @@
 import time
 import sys
+from copy import deepcopy
 from pathlib import Path
 import torch
 from utility.step_lr import StepLR
@@ -12,7 +13,15 @@ from sam import SAM
 from utility.bypass_bn import enable_running_stats, disable_running_stats
 from model.smooth_cross_entropy import smooth_crossentropy
 
-def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, device, logger):
+def pretrain_teacher_model(
+    teacher_model,
+    train_loader,
+    test_loader,
+    args,
+    device,
+    logger,
+    best_checkpoint_path=None,
+):
     """Train a teacher from scratch when no checkpoint is provided."""
     logger.info(
         "No teacher checkpoint provided. Pretraining teacher for %d epochs with %s optimizer before adaptive curriculum.",
@@ -41,6 +50,10 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
     teacher_log = Log(log_each=50, logger=logger)
     teacher_best_val_accuracy = float("-inf")
     teacher_best_epoch = -1
+    teacher_best_state_dict = None
+    if best_checkpoint_path is not None:
+        best_checkpoint_path = Path(best_checkpoint_path)
+        best_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     pretrain_start_perf = time.perf_counter()
 
     for epoch in range(args.epochs):
@@ -110,6 +123,7 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
         if epoch_val_accuracy > teacher_best_val_accuracy:
             teacher_best_val_accuracy = epoch_val_accuracy
             teacher_best_epoch = epoch + 1
+            teacher_best_state_dict = deepcopy(teacher_model.state_dict())
             if epoch_val_accuracy>0.95:
                 logger.info(
                 "Teacher pretrain new best validation accuracy at epoch %d: %.2f%%",
@@ -139,5 +153,11 @@ def pretrain_teacher_model(teacher_model, train_loader, test_loader, args, devic
             teacher_best_val_accuracy * 100,
             teacher_best_epoch,
         )
+        if teacher_best_state_dict is not None:
+            if best_checkpoint_path is not None:
+                torch.save(teacher_best_state_dict, best_checkpoint_path)
+                logger.info("Saved teacher best checkpoint to %s", best_checkpoint_path)
+            teacher_model.load_state_dict(teacher_best_state_dict)
+            logger.info("Loaded teacher best checkpoint into model (epoch %d)", teacher_best_epoch)
     teacher_model.eval()
     return teacher_model
