@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import datetime
 from copy import deepcopy
+from zoneinfo import ZoneInfo
 
 from model.wide_res_net import WideResNet
 from model.smooth_cross_entropy import smooth_crossentropy
@@ -94,10 +95,14 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     initialize(args, seed=42)
-    train_start_time = datetime.now()
+    train_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
-    student_log_path = Path(__file__).resolve().parent / f"{log_prefix}_student.log"
+    if args.use_adaptive_curriculum:
+        student_log_filename = f"{log_prefix}_student.log"
+    else:
+        student_log_filename = f"{log_prefix}_base.log"
+    student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     if is_main_process():
         logger.info("Student training log file: %s", student_log_path)
