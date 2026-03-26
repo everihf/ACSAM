@@ -34,7 +34,10 @@ if importlib.util.find_spec("matplotlib.pyplot") is not None:
 else:
     plt = None
 
+def beijing_time(*args):
+    return time.localtime(time.time() + 8*3600)#指定时区：北京时间（UTC+8）= 当前时间（UTC）+ 8小时（8*3600秒）
 
+logging.Formatter.converter = beijing_time
 def parse_bool(value):
     if isinstance(value, bool):
         return value
