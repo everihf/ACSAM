@@ -34,6 +34,17 @@ else:
     plt = None
 
 
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = str(value).strip().lower()
+    if value in {"1", "true", "t", "yes", "y"}:
+        return True
+    if value in {"0", "false", "f", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -42,6 +53,12 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", default="cifar10", type=str, choices=["cifar10", "cifar100"], help="Dataset to train on.")
     parser.add_argument("--batch_size", default=256, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
+    parser.add_argument(
+        "--multi_gpu",
+        default=True,
+        type=parse_bool,
+        help="Use all available CUDA GPUs via DataParallel when possible. Accepts: true/false.",
+    )
     #model
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")#WRN-16-8 中的 16 就是 depth，表示网络的深度，即层数。WRN-16-8 是 Wide ResNet 的一个变体，其中 16 表示网络的深度，8 表示宽度因子（width factor）。在 WRN 中，depth 通常是 6n+4 的形式，其中 n 是一个整数，表示每个阶段（stage）中 BasicUnit 的数量。因此，WRN-16-8 中的 depth=16 意味着每个阶段有 2 个 BasicUnit（因为 (16-4)/6=2），总共有 3 个阶段（stage），加上初始卷积层和最后的全连接层，总共是 16 层。
     parser.add_argument("--dropout", default=0.0, type=float, help="Dropout rate.")
@@ -99,6 +116,17 @@ if __name__ == "__main__":
         in_channels=3,
         labels=len(dataset.classes),
     ).to(device)
+    use_multi_gpu = bool(args.multi_gpu) and torch.cuda.is_available() and torch.cuda.device_count() > 1
+    if use_multi_gpu:
+        model = torch.nn.DataParallel(model)
+        logger.info("Enabled DataParallel with %d GPUs.", torch.cuda.device_count())
+    else:
+        logger.info(
+            "Multi-GPU disabled or unavailable. multi_gpu=%s, cuda_available=%s, gpu_count=%d",
+            args.multi_gpu,
+            torch.cuda.is_available(),
+            torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        )
     #WideResnet充当model
 
     curriculum = None
@@ -112,7 +140,17 @@ if __name__ == "__main__":
         teacher_model = deepcopy(model)
         if args.teacher_checkpoint:
             teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
-            teacher_model.load_state_dict(teacher_state)
+            try:
+                teacher_model.load_state_dict(teacher_state)
+            except RuntimeError:
+                if isinstance(teacher_model, torch.nn.DataParallel):
+                    teacher_model.module.load_state_dict(teacher_state)
+                else:
+                    adapted_state = {
+                        k.replace("module.", "", 1) if k.startswith("module.") else k: v
+                        for k, v in teacher_state.items()
+                    }
+                    teacher_model.load_state_dict(adapted_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
             teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
