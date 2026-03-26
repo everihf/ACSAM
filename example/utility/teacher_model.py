@@ -123,7 +123,7 @@ def pretrain_teacher_model(
         if epoch_val_accuracy > teacher_best_val_accuracy:
             teacher_best_val_accuracy = epoch_val_accuracy
             teacher_best_epoch = epoch + 1
-            if isinstance(teacher_model, torch.nn.DataParallel):
+            if isinstance(teacher_model, (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
                 teacher_best_state_dict = deepcopy(teacher_model.module.state_dict())
             else:
                 teacher_best_state_dict = deepcopy(teacher_model.state_dict())#暂时保存最佳模型的权重参数到内存，最好训练完成再写入磁盘
@@ -160,7 +160,7 @@ def pretrain_teacher_model(
             if best_checkpoint_path is not None:
                 torch.save(teacher_best_state_dict, best_checkpoint_path)
                 logger.info("Saved teacher best checkpoint to %s", best_checkpoint_path)
-            if isinstance(teacher_model, torch.nn.DataParallel):
+            if isinstance(teacher_model, (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
                 teacher_model.module.load_state_dict(teacher_best_state_dict)
             else:
                 teacher_model.load_state_dict(teacher_best_state_dict)#有这步加载：return 的是 best；没这步加载：return 的是 last。

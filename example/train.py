@@ -1,11 +1,16 @@
 import argparse
 import csv
 import importlib.util
+import os
 import torch
+import torch.distributed as dist
 import logging
 import time
 from datetime import datetime
 from copy import deepcopy
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from model.wide_res_net import WideResNet
 from model.smooth_cross_entropy import smooth_crossentropy
@@ -45,6 +50,10 @@ def parse_bool(value):
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
+def is_main_process():
+    return (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -57,7 +66,7 @@ if __name__ == "__main__":
         "--multi_gpu",
         default=True,
         type=parse_bool,
-        help="Use all available CUDA GPUs via DataParallel when possible. Accepts: true/false.",
+        help="Use DistributedDataParallel when launched with torchrun and multiple GPUs. Accepts: true/false.",
     )
     #model
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")#WRN-16-8 中的 16 就是 depth，表示网络的深度，即层数。WRN-16-8 是 Wide ResNet 的一个变体，其中 16 表示网络的深度，8 表示宽度因子（width factor）。在 WRN 中，depth 通常是 6n+4 的形式，其中 n 是一个整数，表示每个阶段（stage）中 BasicUnit 的数量。因此，WRN-16-8 中的 depth=16 意味着每个阶段有 2 个 BasicUnit（因为 (16-4)/6=2），总共有 3 个阶段（stage），加上初始卷积层和最后的全连接层，总共是 16 层。
@@ -93,21 +102,60 @@ if __name__ == "__main__":
     #解析参数
     args = parser.parse_args()
 
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    use_ddp = bool(args.multi_gpu) and torch.cuda.is_available() and world_size > 1
+    if use_ddp:
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", init_method="env://")
+        device = torch.device(f"cuda:{local_rank}")
+    else:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    initialize(args, seed=42 + (dist.get_rank() if dist.is_initialized() else 0))
     train_start_time = datetime.now()
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
     student_log_path = Path(__file__).resolve().parent / f"{log_prefix}_student.log"
     logger = build_logger("train.student", student_log_path)
-
-    logger.info("Student training log file: %s", student_log_path)
-
-    initialize(args, seed=42)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if is_main_process():
+        logger.info("Student training log file: %s", student_log_path)
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
+    train_sampler = None
+    test_sampler = None
+    if use_ddp:
+        train_sampler = DistributedSampler(
+            dataset.train_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=True,
+        )
+        test_sampler = DistributedSampler(
+            dataset.test_dataset,
+            num_replicas=dist.get_world_size(),
+            rank=dist.get_rank(),
+            shuffle=False,
+        )
+        dataset.train = DataLoader(
+            dataset.train_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            sampler=train_sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+        )
+        dataset.test = DataLoader(
+            dataset.test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            sampler=test_sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+        )
     log = Log(log_each=50, logger=logger)#每 50 个 step 打印一次训练中间结果
     model = WideResNet(
         args.depth,
@@ -116,24 +164,27 @@ if __name__ == "__main__":
         in_channels=3,
         labels=len(dataset.classes),
     ).to(device)
-    use_multi_gpu = bool(args.multi_gpu) and torch.cuda.is_available() and torch.cuda.device_count() > 1
-    if use_multi_gpu:
-        model = torch.nn.DataParallel(model)
-        logger.info("Enabled DataParallel with %d GPUs.", torch.cuda.device_count())
+    if use_ddp:
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+        if is_main_process():
+            logger.info("Enabled DistributedDataParallel with %d processes.", dist.get_world_size())
     else:
-        logger.info(
-            "Multi-GPU disabled or unavailable. multi_gpu=%s, cuda_available=%s, gpu_count=%d",
-            args.multi_gpu,
-            torch.cuda.is_available(),
-            torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        )
+        if is_main_process():
+            logger.info(
+                "DDP disabled or unavailable. multi_gpu=%s, cuda_available=%s, world_size=%d, gpu_count=%d",
+                args.multi_gpu,
+                torch.cuda.is_available(),
+                world_size,
+                torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            )
     #WideResnet充当model
 
     curriculum = None
     if args.use_adaptive_curriculum:
         teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
         teacher_logger = build_logger("train.teacher", teacher_log_path)
-        logger.info("Teacher pretraining log file: %s", teacher_log_path)
+        if is_main_process():
+            logger.info("Teacher pretraining log file: %s", teacher_log_path)
 
         # 与原 SAM 代码保持一致：学生模型仍然是同一个 WideResNet，
         # 课程学习只是在数据采样和loss上做附加，不改模型定义。
@@ -143,7 +194,7 @@ if __name__ == "__main__":
             try:
                 teacher_model.load_state_dict(teacher_state)
             except RuntimeError:
-                if isinstance(teacher_model, torch.nn.DataParallel):
+                if isinstance(teacher_model, (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
                     teacher_model.module.load_state_dict(teacher_state)
                 else:
                     adapted_state = {
@@ -229,12 +280,13 @@ if __name__ == "__main__":
     best_val_accuracy = float("-inf")
     best_epoch = -1
 
-    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(
-            csv_file,
-            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
-        )
-        writer.writeheader()
+    if is_main_process():
+        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+            )
+            writer.writeheader()
 
     train_start_perf = time.perf_counter()
     for epoch in range(args.epochs):
@@ -242,6 +294,8 @@ if __name__ == "__main__":
         ###模型训练
         model.train()
         train_loader = dataset.train
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         if curriculum is not None:
             if curriculum.curriculum_finished:
                 # 课程扩张到全数据集后，跳过课程采样，直接用全数据集训练。
@@ -249,6 +303,10 @@ if __name__ == "__main__":
                     batch_size=args.batch_size,
                     num_workers=args.num_workers,
                     pin_memory=True,
+                    distributed=use_ddp,
+                    rank=dist.get_rank() if dist.is_initialized() else 0,
+                    world_size=dist.get_world_size() if dist.is_initialized() else 1,
+                    epoch=epoch,
                 )
             else:
                 # 每个epoch按当前 difficulty/pace 重新构造课程子集。
@@ -256,6 +314,10 @@ if __name__ == "__main__":
                     batch_size=args.batch_size,
                     num_workers=args.num_workers,
                     pin_memory=True,
+                    distributed=use_ddp,
+                    rank=dist.get_rank() if dist.is_initialized() else 0,
+                    world_size=dist.get_world_size() if dist.is_initialized() else 1,
+                    epoch=epoch,
                 )
         log.train(len_dataset=len(train_loader))#载入训练集长度
 
@@ -342,6 +404,17 @@ if __name__ == "__main__":
                 eval_steps += int(targets.numel())
                 eval_correct_sum += int(correct.sum().item())
 
+        if dist.is_initialized():
+            reduced = torch.tensor(
+                [eval_loss_sum, float(eval_steps), float(eval_correct_sum)],
+                device=device,
+                dtype=torch.float64,
+            )
+            dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
+            eval_loss_sum = float(reduced[0].item())
+            eval_steps = int(reduced[1].item())
+            eval_correct_sum = int(reduced[2].item())
+
         epoch_val_loss = eval_loss_sum / eval_steps if eval_steps > 0 else float("nan")
         epoch_val_accuracy = eval_correct_sum / eval_steps if eval_steps > 0 else float("nan")
         val_curve.append(
@@ -351,49 +424,53 @@ if __name__ == "__main__":
                 "val_accuracy": epoch_val_accuracy,
             }
         )
-        with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(
-                csv_file,
-                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
-            )
-            writer.writerow(
-                {
-                    "run_name": run_name,
-                    "method": method_name,
-                    "epoch": epoch + 1,
-                    "cumulative_batches": cumulative_batches,
-                    "val_accuracy": epoch_val_accuracy,
-                }
-            )
+        if is_main_process():
+            with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+                )
+                writer.writerow(
+                    {
+                        "run_name": run_name,
+                        "method": method_name,
+                        "epoch": epoch + 1,
+                        "cumulative_batches": cumulative_batches,
+                        "val_accuracy": epoch_val_accuracy,
+                    }
+                )
 
 
         if epoch_val_accuracy > best_val_accuracy:
             best_val_accuracy = epoch_val_accuracy
             best_epoch = epoch + 1
-            if best_val_accuracy>0.95:
+            if best_val_accuracy > 0.95 and is_main_process():
                 logger.info(
-                "New best validation accuracy at epoch %d: %.2f%%",
-                best_epoch,
-                best_val_accuracy * 100,)
+                    "New best validation accuracy at epoch %d: %.2f%%",
+                    best_epoch,
+                    best_val_accuracy * 100,
+                )
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
-        logger.info(
-            "Epoch %d/%d t: %.2fs  (T: %.2fs), "
-            "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
-            epoch + 1,
-            args.epochs,
-            epoch_duration_seconds,
-            elapsed_since_start_seconds,
-            epoch_batches,
-            epoch_val_accuracy * 100,   # ⭐ 这里乘100
-            epoch_val_loss,
-        )
+        if is_main_process():
+            logger.info(
+                "Epoch %d/%d t: %.2fs  (T: %.2fs), "
+                "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
+                epoch + 1,
+                args.epochs,
+                epoch_duration_seconds,
+                elapsed_since_start_seconds,
+                epoch_batches,
+                epoch_val_accuracy * 100,   # ⭐ 这里乘100
+                epoch_val_loss,
+            )
 
     log.flush()#打印/冲洗 log
-    logger.info("Saved validation curve data to %s", csv_path)
+    if is_main_process():
+        logger.info("Saved validation curve data to %s", csv_path)
 
-    if plt is not None and len(val_curve) > 0:
+    if plt is not None and len(val_curve) > 0 and is_main_process():
         x = [point["cumulative_batches"] for point in val_curve]
         y = [point["val_accuracy"] for point in val_curve]
         plt.figure(figsize=(8, 5))
@@ -406,14 +483,17 @@ if __name__ == "__main__":
         plt.savefig(plot_path, dpi=200)
         plt.close()
         logger.info("Saved validation curve plot to %s", plot_path)
-    else:
+    elif is_main_process():
         logger.warning("matplotlib is not available; skipped saving validation curve plot.")
 
     total_training_seconds = (datetime.now() - train_start_time).total_seconds()
-    logger.info("Training finished in %.2f seconds", total_training_seconds)
-    if best_epoch > 0:
-        logger.info(
-            "Best validation accuracy: %.2f%% (epoch %d)",
-            best_val_accuracy * 100,
-            best_epoch,
-        )
+    if is_main_process():
+        logger.info("Training finished in %.2f seconds", total_training_seconds)
+        if best_epoch > 0:
+            logger.info(
+                "Best validation accuracy: %.2f%% (epoch %d)",
+                best_val_accuracy * 100,
+                best_epoch,
+            )
+    if dist.is_initialized():
+        dist.destroy_process_group()
