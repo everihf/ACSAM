@@ -57,7 +57,7 @@ def is_main_process():
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
-    parser.add_argument("--adaptive", default=True, type=bool, help="True if you want to use the Adaptive SAM.")#自适应SAM（ASAM）是SAM的一个变体，它在计算扰动时考虑了每个参数的绝对值。这意味着对于较大的参数，ASAM会施加更大的扰动，而对于较小的参数，扰动则较小。这种自适应机制可以帮助模型更有效地找到平坦的最小值，从而提高泛化性能。
+    parser.add_argument("--adaptive", default=True, type=parse_bool, help="True if you want to use the Adaptive SAM.")#自适应SAM（ASAM）是SAM的一个变体，它在计算扰动时考虑了每个参数的绝对值。这意味着对于较大的参数，ASAM会施加更大的扰动，而对于较小的参数，扰动则较小。这种自适应机制可以帮助模型更有效地找到平坦的最小值，从而提高泛化性能。
     #数据集
     parser.add_argument("--dataset", default="cifar10", type=str, choices=["cifar10", "cifar100"], help="Dataset to train on.")
     parser.add_argument("--batch_size", default=256, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # adaptive curriculum
-    parser.add_argument("--use_adaptive_curriculum", default=False, type=bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
+    parser.add_argument("--use_adaptive_curriculum", default=False, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
         #例如"example/checkpoints/03-25_16-15_teacher_model.pt"
     parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则根据时间戳自动生成。.")
     parser.add_argument("--method_name", default="", type=str, help="方法标签已保存到指标CSV文件中，以便后续多轮比较.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
-    parser.add_argument("--save_teacher_checkpoint", default=True, type=bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
+    parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
     args = parser.parse_args()
 
@@ -120,6 +120,14 @@ if __name__ == "__main__":
     logger = build_logger("train.student", student_log_path)
     if is_main_process():
         logger.info("Student training log file: %s", student_log_path)
+        logger.info(
+            "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s, multi_gpu=%s",
+            args.optimizer,
+            args.adaptive,
+            args.use_adaptive_curriculum,
+            args.teacher_optimizer,
+            args.multi_gpu,
+        )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
