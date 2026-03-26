@@ -4,7 +4,6 @@ from copy import deepcopy
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
-from torch.utils.data.distributed import DistributedSampler
 
 
 class IndexedDataset(Dataset):
@@ -111,16 +110,12 @@ class AdaptiveCurriculum:
         growth = self.pace_p * (self.pace_q ** int(math.floor(self.global_batch * (self.batch_size / 100) / self.pace_r)))
         return int(self.data_size * min(growth, 1.0))
 
-    def build_dataloader(self, batch_size, num_workers, pin_memory, distributed=False, rank=0, world_size=1, epoch=None):
+    def build_dataloader(self, batch_size, num_workers, pin_memory):
         if self.curriculum_finished:
             return self.build_full_dataloader(
                 batch_size,
                 num_workers,
                 pin_memory,
-                distributed=distributed,
-                rank=rank,
-                world_size=world_size,
-                epoch=epoch,
             )
 
         epoch_size = max(1, self.current_epoch_size())
@@ -131,35 +126,21 @@ class AdaptiveCurriculum:
                 batch_size,
                 num_workers,
                 pin_memory,
-                distributed=distributed,
-                rank=rank,
-                world_size=world_size,
-                epoch=epoch,
             )
 
         # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
         sorted_indices = torch.argsort(self.difficulty)
         dataset = Subset(self.indexed_dataset, sorted_indices[:epoch_size].cpu())
-
-        sampler = None
-        shuffle = True
-        if distributed:
-            sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
-            if epoch is not None:
-                sampler.set_epoch(epoch)
-            shuffle = False
-
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
-            sampler=sampler,
+            shuffle=True,
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
 
-    def build_full_dataloader(self, batch_size, num_workers, pin_memory, distributed=False, rank=0, world_size=1, epoch=None):
-        if self._full_loader is None and not distributed:
+    def build_full_dataloader(self, batch_size, num_workers, pin_memory):
+        if self._full_loader is None:
             self._full_loader = DataLoader(
                 self.indexed_dataset,
                 batch_size=batch_size,
@@ -167,25 +148,7 @@ class AdaptiveCurriculum:
                 num_workers=num_workers,
                 pin_memory=pin_memory,
             )
-        if not distributed:
-            return self._full_loader
-
-        sampler = DistributedSampler(
-            self.indexed_dataset,
-            num_replicas=world_size,
-            rank=rank,
-            shuffle=True,
-        )
-        if epoch is not None:
-            sampler.set_epoch(epoch)
-        return DataLoader(
-            self.indexed_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            sampler=sampler,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        )
+        return self._full_loader
 
     def curriculum_loss(self, per_sample_losses, outputs, indices):
         # 基础监督损失（与原 SAM 训练一致：逐样本损失再求均值）。

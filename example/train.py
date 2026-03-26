@@ -1,16 +1,11 @@
 import argparse
 import csv
 import importlib.util
-import os
 import torch
-import torch.distributed as dist
 import logging
 import time
 from datetime import datetime
 from copy import deepcopy
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
 
 from model.wide_res_net import WideResNet
 from model.smooth_cross_entropy import smooth_crossentropy
@@ -51,7 +46,7 @@ def parse_bool(value):
 
 
 def is_main_process():
-    return (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
+    return True
 
 
 if __name__ == "__main__":
@@ -62,12 +57,6 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", default="cifar10", type=str, choices=["cifar10", "cifar100"], help="Dataset to train on.")
     parser.add_argument("--batch_size", default=256, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
-    parser.add_argument(
-        "--multi_gpu",
-        default=True,
-        type=parse_bool,
-        help="Use DistributedDataParallel when launched with torchrun and multiple GPUs. Accepts: true/false.",
-    )
     #model
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")#WRN-16-8 中的 16 就是 depth，表示网络的深度，即层数。WRN-16-8 是 Wide ResNet 的一个变体，其中 16 表示网络的深度，8 表示宽度因子（width factor）。在 WRN 中，depth 通常是 6n+4 的形式，其中 n 是一个整数，表示每个阶段（stage）中 BasicUnit 的数量。因此，WRN-16-8 中的 depth=16 意味着每个阶段有 2 个 BasicUnit（因为 (16-4)/6=2），总共有 3 个阶段（stage），加上初始卷积层和最后的全连接层，总共是 16 层。
     parser.add_argument("--dropout", default=0.0, type=float, help="Dropout rate.")
@@ -102,17 +91,9 @@ if __name__ == "__main__":
     #解析参数
     args = parser.parse_args()
 
-    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
-    world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    use_ddp = bool(args.multi_gpu) and torch.cuda.is_available() and world_size > 1
-    if use_ddp:
-        torch.cuda.set_device(local_rank)
-        dist.init_process_group(backend="nccl", init_method="env://")
-        device = torch.device(f"cuda:{local_rank}")
-    else:
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    initialize(args, seed=42 + (dist.get_rank() if dist.is_initialized() else 0))
+    initialize(args, seed=42)
     train_start_time = datetime.now()
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
@@ -121,49 +102,17 @@ if __name__ == "__main__":
     if is_main_process():
         logger.info("Student training log file: %s", student_log_path)
         logger.info(
-            "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s, multi_gpu=%s",
+            "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s",
             args.optimizer,
             args.adaptive,
             args.use_adaptive_curriculum,
             args.teacher_optimizer,
-            args.multi_gpu,
         )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
-    train_sampler = None
-    test_sampler = None
-    if use_ddp:
-        train_sampler = DistributedSampler(
-            dataset.train_dataset,
-            num_replicas=dist.get_world_size(),
-            rank=dist.get_rank(),
-            shuffle=True,
-        )
-        test_sampler = DistributedSampler(
-            dataset.test_dataset,
-            num_replicas=dist.get_world_size(),
-            rank=dist.get_rank(),
-            shuffle=False,
-        )
-        dataset.train = DataLoader(
-            dataset.train_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            sampler=train_sampler,
-            num_workers=args.num_workers,
-            pin_memory=True,
-        )
-        dataset.test = DataLoader(
-            dataset.test_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            sampler=test_sampler,
-            num_workers=args.num_workers,
-            pin_memory=True,
-        )
     log = Log(log_each=50, logger=logger)#每 50 个 step 打印一次训练中间结果
     model = WideResNet(
         args.depth,
@@ -172,19 +121,12 @@ if __name__ == "__main__":
         in_channels=3,
         labels=len(dataset.classes),
     ).to(device)
-    if use_ddp:
-        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
-        if is_main_process():
-            logger.info("Enabled DistributedDataParallel with %d processes.", dist.get_world_size())
-    else:
-        if is_main_process():
-            logger.info(
-                "DDP disabled or unavailable. multi_gpu=%s, cuda_available=%s, world_size=%d, gpu_count=%d",
-                args.multi_gpu,
-                torch.cuda.is_available(),
-                world_size,
-                torch.cuda.device_count() if torch.cuda.is_available() else 0,
-            )
+    if is_main_process():
+        logger.info(
+            "Running single-process training. cuda_available=%s, gpu_count=%d",
+            torch.cuda.is_available(),
+            torch.cuda.device_count() if torch.cuda.is_available() else 0,
+        )
     #WideResnet充当model
 
     curriculum = None
@@ -199,17 +141,7 @@ if __name__ == "__main__":
         teacher_model = deepcopy(model)
         if args.teacher_checkpoint:
             teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
-            try:
-                teacher_model.load_state_dict(teacher_state)
-            except RuntimeError:
-                if isinstance(teacher_model, (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel)):
-                    teacher_model.module.load_state_dict(teacher_state)
-                else:
-                    adapted_state = {
-                        k.replace("module.", "", 1) if k.startswith("module.") else k: v
-                        for k, v in teacher_state.items()
-                    }
-                    teacher_model.load_state_dict(adapted_state)
+            teacher_model.load_state_dict(teacher_state)
             logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
         else:
             teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
@@ -302,8 +234,6 @@ if __name__ == "__main__":
         ###模型训练
         model.train()
         train_loader = dataset.train
-        if train_sampler is not None:
-            train_sampler.set_epoch(epoch)
         if curriculum is not None:
             if curriculum.curriculum_finished:
                 # 课程扩张到全数据集后，跳过课程采样，直接用全数据集训练。
@@ -311,10 +241,6 @@ if __name__ == "__main__":
                     batch_size=args.batch_size,
                     num_workers=args.num_workers,
                     pin_memory=True,
-                    distributed=use_ddp,
-                    rank=dist.get_rank() if dist.is_initialized() else 0,
-                    world_size=dist.get_world_size() if dist.is_initialized() else 1,
-                    epoch=epoch,
                 )
             else:
                 # 每个epoch按当前 difficulty/pace 重新构造课程子集。
@@ -322,10 +248,6 @@ if __name__ == "__main__":
                     batch_size=args.batch_size,
                     num_workers=args.num_workers,
                     pin_memory=True,
-                    distributed=use_ddp,
-                    rank=dist.get_rank() if dist.is_initialized() else 0,
-                    world_size=dist.get_world_size() if dist.is_initialized() else 1,
-                    epoch=epoch,
                 )
         log.train(len_dataset=len(train_loader))#载入训练集长度
 
@@ -412,17 +334,6 @@ if __name__ == "__main__":
                 eval_steps += int(targets.numel())
                 eval_correct_sum += int(correct.sum().item())
 
-        if dist.is_initialized():
-            reduced = torch.tensor(
-                [eval_loss_sum, float(eval_steps), float(eval_correct_sum)],
-                device=device,
-                dtype=torch.float64,
-            )
-            dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
-            eval_loss_sum = float(reduced[0].item())
-            eval_steps = int(reduced[1].item())
-            eval_correct_sum = int(reduced[2].item())
-
         epoch_val_loss = eval_loss_sum / eval_steps if eval_steps > 0 else float("nan")
         epoch_val_accuracy = eval_correct_sum / eval_steps if eval_steps > 0 else float("nan")
         val_curve.append(
@@ -503,5 +414,3 @@ if __name__ == "__main__":
                 best_val_accuracy * 100,
                 best_epoch,
             )
-    if dist.is_initialized():
-        dist.destroy_process_group()
