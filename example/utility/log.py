@@ -1,13 +1,27 @@
 import time
 import logging
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+
+class BeijingTimeFormatter(logging.Formatter):
+    """Formatter that renders timestamps in Asia/Shanghai time."""
+
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=ZoneInfo("Asia/Shanghai"))
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+
+
 def build_logger(name: str, log_path: Path) -> logging.Logger:
     """Create an isolated logger that writes to its own file (and stdout)."""
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = BeijingTimeFormatter("%(asctime)s - %(levelname)s - %(message)s")
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
