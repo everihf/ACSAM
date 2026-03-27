@@ -1,7 +1,7 @@
 import argparse
 import csv
 import importlib.util
-import math
+
 import torch
 import logging
 import time
@@ -361,7 +361,7 @@ if __name__ == "__main__":
             )
 
 
-        if math.isfinite(epoch_val_accuracy) and epoch_val_accuracy > best_val_accuracy:
+        if epoch_val_accuracy > best_val_accuracy:
             best_val_accuracy = epoch_val_accuracy
             best_epoch = epoch + 1
             if best_val_accuracy > 0.95:
