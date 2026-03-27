@@ -46,10 +46,6 @@ def parse_bool(value):
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
-def is_main_process():
-    return True
-
-
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -104,15 +100,14 @@ if __name__ == "__main__":
         student_log_filename = f"{log_prefix}_base.log"
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
-    if is_main_process():
-        logger.info("Student training log file: %s", student_log_path)
-        logger.info(
-            "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s",
-            args.optimizer,
-            args.adaptive,
-            args.use_adaptive_curriculum,
-            args.teacher_optimizer,
-        )
+    logger.info("Student training log file: %s", student_log_path)
+    logger.info(
+        "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s",
+        args.optimizer,
+        args.adaptive,
+        args.use_adaptive_curriculum,
+        args.teacher_optimizer,
+    )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -126,20 +121,18 @@ if __name__ == "__main__":
         in_channels=3,
         labels=len(dataset.classes),
     ).to(device)
-    if is_main_process():
-        logger.info(
-            "Running single-process training. cuda_available=%s, gpu_count=%d",
-            torch.cuda.is_available(),
-            torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        )
+    logger.info(
+        "Running single-process training. cuda_available=%s, gpu_count=%d",
+        torch.cuda.is_available(),
+        torch.cuda.device_count() if torch.cuda.is_available() else 0,
+    )
     #WideResnet充当model
 
     curriculum = None
     if args.use_adaptive_curriculum:
         teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
         teacher_logger = build_logger("train.teacher", teacher_log_path)
-        if is_main_process():
-            logger.info("Teacher pretraining log file: %s", teacher_log_path)
+        logger.info("Teacher pretraining log file: %s", teacher_log_path)
 
         # 与原 SAM 代码保持一致：学生模型仍然是同一个 WideResNet，
         # 课程学习只是在数据采样和loss上做附加，不改模型定义。
@@ -225,13 +218,12 @@ if __name__ == "__main__":
     best_val_accuracy = float("-inf")
     best_epoch = -1
 
-    if is_main_process():
-        with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(
-                csv_file,
-                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
-            )
-            writer.writeheader()
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(
+            csv_file,
+            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+        )
+        writer.writeheader()
 
     train_start_perf = time.perf_counter()
     for epoch in range(args.epochs):
@@ -348,27 +340,26 @@ if __name__ == "__main__":
                 "val_accuracy": epoch_val_accuracy,
             }
         )
-        if is_main_process():
-            with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
-                writer = csv.DictWriter(
-                    csv_file,
-                    fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
-                )
-                writer.writerow(
-                    {
-                        "run_name": run_name,
-                        "method": method_name,
-                        "epoch": epoch + 1,
-                        "cumulative_batches": cumulative_batches,
-                        "val_accuracy": epoch_val_accuracy,
-                    }
-                )
+        with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+            )
+            writer.writerow(
+                {
+                    "run_name": run_name,
+                    "method": method_name,
+                    "epoch": epoch + 1,
+                    "cumulative_batches": cumulative_batches,
+                    "val_accuracy": epoch_val_accuracy,
+                }
+            )
 
 
         if epoch_val_accuracy > best_val_accuracy:
             best_val_accuracy = epoch_val_accuracy
             best_epoch = epoch + 1
-            if best_val_accuracy > 0.95 and is_main_process():
+            if best_val_accuracy > 0.95:
                 logger.info(
                     "New best validation accuracy at epoch %d: %.2f%%",
                     best_epoch,
@@ -377,24 +368,22 @@ if __name__ == "__main__":
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         elapsed_since_start_seconds = time.perf_counter() - train_start_perf
-        if is_main_process():
-            logger.info(
-                "Epoch %d/%d t: %.2fs  (T: %.2fs), "
-                "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
-                epoch + 1,
-                args.epochs,
-                epoch_duration_seconds,
-                elapsed_since_start_seconds,
-                epoch_batches,
-                epoch_val_accuracy * 100,   # ⭐ 这里乘100
-                epoch_val_loss,
-            )
+        logger.info(
+            "Epoch %d/%d t: %.2fs  (T: %.2fs), "
+            "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
+            epoch + 1,
+            args.epochs,
+            epoch_duration_seconds,
+            elapsed_since_start_seconds,
+            epoch_batches,
+            epoch_val_accuracy * 100,   # ⭐ 这里乘100
+            epoch_val_loss,
+        )
 
     log.flush()#打印/冲洗 log
-    if is_main_process():
-        logger.info("Saved validation curve data to %s", csv_path)
+    logger.info("Saved validation curve data to %s", csv_path)
 
-    if plt is not None and len(val_curve) > 0 and is_main_process():
+    if plt is not None and len(val_curve) > 0:
         x = [point["cumulative_batches"] for point in val_curve]
         y = [point["val_accuracy"] for point in val_curve]
         plt.figure(figsize=(8, 5))
@@ -407,15 +396,14 @@ if __name__ == "__main__":
         plt.savefig(plot_path, dpi=200)
         plt.close()
         logger.info("Saved validation curve plot to %s", plot_path)
-    elif is_main_process():
+    else:
         logger.warning("matplotlib is not available; skipped saving validation curve plot.")
 
     total_training_seconds = (datetime.now() - train_start_time).total_seconds()
-    if is_main_process():
-        logger.info("Training finished in %.2f seconds", total_training_seconds)
-        if best_epoch > 0:
-            logger.info(
-                "Best validation accuracy: %.2f%% (epoch %d)",
-                best_val_accuracy * 100,
-                best_epoch,
-            )
+    logger.info("Training finished in %.2f seconds", total_training_seconds)
+    if best_epoch > 0:
+        logger.info(
+            "Best validation accuracy: %.2f%% (epoch %d)",
+            best_val_accuracy * 100,
+            best_epoch,
+        )
