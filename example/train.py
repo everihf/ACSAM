@@ -213,9 +213,9 @@ if __name__ == "__main__":
     if args.use_adaptive_curriculum:
         default_method_name = f"{default_method_name}+adaptive_curriculum"
         if args.teacher_optimizer == "sgd":
-            default_method_name = f"{default_method_name}+adaptive_curriculum_teacher-{args.teacher_optimizer}"
+            default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
         elif args.teacher_optimizer == "sam":
-            default_method_name = f"{default_method_name}+adaptive_curriculum_teacher-{args.teacher_optimizer}"
+            default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
     method_name = args.method_name or default_method_name#如果 args.method_name 有值 → 用它  ,否则 → 用 default_method_name
     csv_path = metrics_dir / f"{run_name}_val_curve.csv"
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
