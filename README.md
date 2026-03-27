@@ -87,7 +87,7 @@ for input, output in data:
 
 ### Plot multiple CSV curves in one figure
 
-`example/train.py` saves each run as `example/metrics/*_val_curve.csv` with columns `run_name, method, epoch, cumulative_batches, val_accuracy`.
+`example/train.py` saves each run as `example/metrics/*_val_curve.csv` with columns `run_name, method, epoch, cumulative_batches, elapsed_seconds, val_accuracy` (where `elapsed_seconds` is cumulative elapsed time T since training start).
 
 You can overlay multiple runs into a single plot:
 

@@ -226,7 +226,7 @@ if __name__ == "__main__":
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(
             csv_file,
-            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+            fieldnames=["run_name", "method", "epoch", "cumulative_batches", "elapsed_seconds", "val_accuracy"],
         )
         writer.writeheader()
 
@@ -338,17 +338,19 @@ if __name__ == "__main__":
 
         epoch_val_loss = eval_loss_sum / eval_steps if eval_steps > 0 else float("nan")
         epoch_val_accuracy = eval_correct_sum / eval_steps if eval_steps > 0 else float("nan")
+        elapsed_since_start_seconds = time.perf_counter() - train_start_perf
         val_curve.append(
             {
                 "epoch": epoch + 1,
                 "cumulative_batches": cumulative_batches,
+                "elapsed_seconds": elapsed_since_start_seconds,
                 "val_accuracy": epoch_val_accuracy,
             }
         )
         with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
             writer = csv.DictWriter(
                 csv_file,
-                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "val_accuracy"],
+                fieldnames=["run_name", "method", "epoch", "cumulative_batches", "elapsed_seconds", "val_accuracy"],
             )
             writer.writerow(
                 {
@@ -356,6 +358,7 @@ if __name__ == "__main__":
                     "method": method_name,
                     "epoch": epoch + 1,
                     "cumulative_batches": cumulative_batches,
+                    "elapsed_seconds": elapsed_since_start_seconds,
                     "val_accuracy": epoch_val_accuracy,
                 }
             )
@@ -372,7 +375,6 @@ if __name__ == "__main__":
                 )
 
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
-        elapsed_since_start_seconds = time.perf_counter() - train_start_perf
         logger.info(
             "Epoch %d/%d t: %.2fs  (T: %.2fs), "
             "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
