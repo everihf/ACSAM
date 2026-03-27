@@ -1,6 +1,7 @@
 import argparse
 import csv
 import importlib.util
+import math
 import torch
 import logging
 import time
@@ -360,7 +361,7 @@ if __name__ == "__main__":
             )
 
 
-        if epoch_val_accuracy > best_val_accuracy:
+        if math.isfinite(epoch_val_accuracy) and epoch_val_accuracy > best_val_accuracy:
             best_val_accuracy = epoch_val_accuracy
             best_epoch = epoch + 1
             if best_val_accuracy > 0.95:
@@ -387,23 +388,9 @@ if __name__ == "__main__":
     log.flush()#打印/冲洗 log
     logger.info("Saved validation curve data to %s", csv_path)
 
-    if plt is not None and len(val_curve) > 0:
-        x = [point["cumulative_batches"] for point in val_curve]
-        y = [point["val_accuracy"] for point in val_curve]
-        plt.figure(figsize=(8, 5))
-        plt.plot(x, y, marker="o", linewidth=1.5)
-        plt.xlabel("Cumulative Training Batches")
-        plt.ylabel("Validation Accuracy")
-        plt.title(f"Validation Accuracy Curve ({method_name})")
-        plt.grid(alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(plot_path, dpi=200)
-        plt.close()
-        logger.info("Saved validation curve plot to %s", plot_path)
-    else:
-        logger.warning("matplotlib is not available; skipped saving validation curve plot.")
-
-    total_training_seconds = (datetime.now() - train_start_time).total_seconds()
+    total_training_seconds = (
+        datetime.now(ZoneInfo("Asia/Shanghai")) - train_start_time
+    ).total_seconds()
     logger.info("Training finished in %.2f seconds", total_training_seconds)
     if best_epoch > 0:
         logger.info(
@@ -411,3 +398,27 @@ if __name__ == "__main__":
             best_val_accuracy * 100,
             best_epoch,
         )
+    else:
+        logger.warning(
+            "Best validation accuracy is unavailable (epochs=%d, eval_steps may be 0).",
+            args.epochs,
+        )
+
+    if plt is not None and len(val_curve) > 0:
+        try:
+            x = [point["cumulative_batches"] for point in val_curve]
+            y = [point["val_accuracy"] for point in val_curve]
+            plt.figure(figsize=(8, 5))
+            plt.plot(x, y, marker="o", linewidth=1.5)
+            plt.xlabel("Cumulative Training Batches")
+            plt.ylabel("Validation Accuracy")
+            plt.title(f"Validation Accuracy Curve ({method_name})")
+            plt.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=200)
+            plt.close()
+            logger.info("Saved validation curve plot to %s", plot_path)
+        except Exception:
+            logger.exception("Failed to save validation curve plot to %s", plot_path)
+    else:
+        logger.warning("matplotlib is not available; skipped saving validation curve plot.")
