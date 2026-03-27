@@ -84,6 +84,27 @@ for input, output in data:
 ...
 ```
 
+
+### Plot multiple CSV curves in one figure
+
+`example/train.py` saves each run as `example/metrics/*_val_curve.csv` with columns `run_name, method, epoch, cumulative_batches, val_accuracy`.
+
+You can overlay multiple runs into a single plot:
+
+```bash
+python example/plot_multi_csv.py \
+  example/metrics/run_a_val_curve.csv \
+  example/metrics/run_b_val_curve.csv \
+  --x cumulative_batches \
+  --label-col method \
+  --output example/metrics/compare_val_curves.png
+```
+
+Useful options:
+- `--x epoch` to compare by epoch instead of cumulative batches
+- `--label-col run_name` to use run names in legend
+- `--title "Your Title"` to customize the figure title
+
 ### Training tips
 - [@hjq133](https://github.com/hjq133): The suggested usage can potentially cause problems if you use batch normalization. The running statistics are computed in both forward passes, but they should be computed only for the first one. A possible solution is to set BN momentum to zero (kindly suggested by [@ahmdtaha](https://github.com/ahmdtaha)) to bypass the running statistics during the second pass. An example usage is on lines [51](https://github.com/davda54/sam/blob/cdcbdc1574022d3a3c3240da136378c38562d51d/example/train.py#L51) and [58](https://github.com/davda54/sam/blob/cdcbdc1574022d3a3c3240da136378c38562d51d/example/train.py#L58) in [example/train.py](https://github.com/davda54/sam/blob/cdcbdc1574022d3a3c3240da136378c38562d51d/example/train.py):
 ```python
