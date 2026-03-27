@@ -212,7 +212,11 @@ if __name__ == "__main__":
         default_method_name = "asam"
     if args.use_adaptive_curriculum:
         default_method_name = f"{default_method_name}+adaptive_curriculum"
-    method_name = args.method_name or default_method_name
+        if args.teacher_optimizer == "sgd":
+            default_method_name += f"{default_method_name}+adaptive_curriculum_teacher-{args.teacher_optimizer}"
+        elif args.teacher_optimizer == "sam":
+            default_method_name += f"{default_method_name}+adaptive_curriculum_teacher-{args.teacher_optimizer}"
+    method_name = args.method_name or default_method_name#如果 args.method_name 有值 → 用它  ,否则 → 用 default_method_name
     csv_path = metrics_dir / f"{run_name}_val_curve.csv"
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
     best_val_accuracy = float("-inf")
