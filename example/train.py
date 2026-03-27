@@ -80,6 +80,12 @@ if __name__ == "__main__":
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
     parser.add_argument("--lambda1_decay", default=None, type=float, help="Optional decay step for lambda1 at each inv interval.")
     parser.add_argument("--bottom_lambda1", default=0.1, type=float, help="Lower bound of lambda1 when decay is enabled.")
+    parser.add_argument(
+        "--distill_extra_epochs_after_curriculum",
+        default=0,
+        type=int,
+        help="How many extra epochs to keep distillation after curriculum_finished=True. Set 0 to stop distillation immediately when curriculum finishes.",
+    )
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
     parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则根据时间戳自动生成。.")
@@ -109,6 +115,11 @@ if __name__ == "__main__":
         args.use_adaptive_curriculum,
         args.teacher_optimizer,
     )
+    if args.use_adaptive_curriculum:
+        logger.info(
+            "Distillation extra epochs after curriculum finished: %d",
+            max(0, args.distill_extra_epochs_after_curriculum),
+        )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -222,6 +233,7 @@ if __name__ == "__main__":
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
     best_val_accuracy = float("-inf")
     best_epoch = -1
+    curriculum_finished_epoch = None
 
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(
@@ -238,6 +250,8 @@ if __name__ == "__main__":
         train_loader = dataset.train
         if curriculum is not None:
             if curriculum.curriculum_finished:
+                if curriculum_finished_epoch is None:
+                    curriculum_finished_epoch = epoch + 1
                 # 课程扩张到全数据集后，跳过课程采样，直接用全数据集训练。
                 train_loader = curriculum.build_full_dataloader(
                     batch_size=args.batch_size,
@@ -251,7 +265,16 @@ if __name__ == "__main__":
                     num_workers=args.num_workers,
                     pin_memory=True,
                 )
+                if curriculum.curriculum_finished and curriculum_finished_epoch is None:
+                    curriculum_finished_epoch = epoch + 1
         log.train(len_dataset=len(train_loader))#载入训练集长度
+        distillation_enabled = False
+        if curriculum is not None:
+            extra_epochs = max(0, args.distill_extra_epochs_after_curriculum)
+            if not curriculum.curriculum_finished:
+                distillation_enabled = True
+            elif curriculum_finished_epoch is not None:
+                distillation_enabled = (epoch + 1) < (curriculum_finished_epoch + extra_epochs)
 
         epoch_batches = 0
         for batch in train_loader:
@@ -269,7 +292,7 @@ if __name__ == "__main__":
                 #把模型里 BatchNorm 层的 momentum 恢复成原来的值，让 BN 继续正常更新 running mean / running var
                 predictions = model(inputs)
                 per_sample_loss = smooth_crossentropy(predictions, targets, smoothing=args.label_smoothing)#标签平滑（Label Smoothing）版交叉熵
-                if curriculum is not None and not curriculum.curriculum_finished:
+                if curriculum is not None and distillation_enabled:
                     # 课程学习loss：监督损失 + 蒸馏 KL
                     first_loss = curriculum.curriculum_loss(per_sample_loss, predictions, indices)
                 else:
@@ -282,7 +305,7 @@ if __name__ == "__main__":
                 disable_running_stats(model)
                 second_predictions = model(inputs)
                 second_per_sample_loss = smooth_crossentropy(second_predictions, targets, smoothing=args.label_smoothing)
-                if curriculum is not None and not curriculum.curriculum_finished:
+                if curriculum is not None and distillation_enabled:
                     # second step 保持同样的课程loss，确保 SAM 两步一致。
                     second_loss = curriculum.curriculum_loss(second_per_sample_loss, second_predictions, indices)
                 else:
@@ -293,7 +316,7 @@ if __name__ == "__main__":
             else: # sgd 
                 predictions = model(inputs)
                 per_sample_loss = smooth_crossentropy(predictions, targets, smoothing=args.label_smoothing)#标签平滑（Label Smoothing）版交叉熵
-                if curriculum is not None and not curriculum.curriculum_finished:
+                if curriculum is not None and distillation_enabled:
                     loss = curriculum.curriculum_loss(per_sample_loss, predictions, indices)
                 else:
                     loss = per_sample_loss.mean()
