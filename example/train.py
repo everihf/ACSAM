@@ -70,7 +70,7 @@ if __name__ == "__main__":
     # adaptive curriculum
     parser.add_argument("--use_adaptive_curriculum", default=False, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
-        #例如"example/checkpoints/03-25_16-15_teacher_model.pt"
+        #例如example/checkpoints/03-25_16-15_teacher_model.pt
     parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
     parser.add_argument("--pace_p", default=0.04, type=float, help="Initial curriculum ratio.")
     parser.add_argument("--pace_q", default=1.1, type=float, help="Curriculum growth base.")

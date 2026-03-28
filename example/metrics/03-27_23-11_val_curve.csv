@@ -1,0 +1,7 @@
+run_name,method,epoch,cumulative_batches,elapsed_seconds,val_accuracy
+03-27_23-11,asam+adaptive_curriculum-sgd,1,20,5.283722119987942,0.1912
+03-27_23-11,asam+adaptive_curriculum-sgd,2,40,10.019466325989924,0.1549
+03-27_23-11,asam+adaptive_curriculum-sgd,3,60,14.755098402994918,0.1391
+03-27_23-11,asam+adaptive_curriculum-sgd,4,80,19.502791323990095,0.1971
+03-27_23-11,asam+adaptive_curriculum-sgd,5,100,24.27743101300439,0.2105
+03-27_23-11,asam+adaptive_curriculum-sgd,6,122,29.31767955797841,0.2215
