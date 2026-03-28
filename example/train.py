@@ -133,11 +133,6 @@ if __name__ == "__main__":
         in_channels=3,
         labels=len(dataset.classes),
     ).to(device)
-    logger.info(
-        "Running single-process training. cuda_available=%s, gpu_count=%d",
-        torch.cuda.is_available(),
-        torch.cuda.device_count() if torch.cuda.is_available() else 0,
-    )
     #WideResnet充当model
 
     curriculum = None
