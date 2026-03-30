@@ -44,6 +44,7 @@ class AdaptiveCurriculum:
         lambda1,
         lambda1_decay,
         bottom_lambda1,
+        use_difficulty_sorting=True,
     ):
         self.device = device
         self.num_classes = num_classes
@@ -57,6 +58,7 @@ class AdaptiveCurriculum:
         self.inv = inv
 
         self.alpha = alpha
+        self.use_difficulty_sorting = use_difficulty_sorting
         self.lambda1 = lambda1
         self.lambda1_decay = lambda1_decay
         self.bottom_lambda1 = bottom_lambda1
@@ -128,9 +130,14 @@ class AdaptiveCurriculum:
                 pin_memory,
             )
 
-        # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
-        sorted_indices = torch.argsort(self.difficulty)
-        dataset = Subset(self.indexed_dataset, sorted_indices[:epoch_size].cpu())
+        if self.use_difficulty_sorting:
+            # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
+            selected_indices = torch.argsort(self.difficulty)[:epoch_size]
+        else:
+            # 不按难度排序时，随机选取 current_epoch_size() 个样本。
+            selected_indices = torch.randperm(self.data_size, device=self.device)[:epoch_size]
+
+        dataset = Subset(self.indexed_dataset, selected_indices.cpu())
         return DataLoader(
             dataset,
             batch_size=batch_size,

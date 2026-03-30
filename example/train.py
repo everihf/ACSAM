@@ -77,6 +77,12 @@ if __name__ == "__main__":
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
+    parser.add_argument(
+        "--use_difficulty_sorting",
+        default=True,
+        type=parse_bool,
+        help="Whether to sort by difficulty when selecting curriculum samples. If False, randomly sample current_epoch_size() samples.",
+    )
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
     parser.add_argument("--lambda1_decay", default=None, type=float, help="Optional decay step for lambda1 at each inv interval.")
     parser.add_argument("--bottom_lambda1", default=0.1, type=float, help="Lower bound of lambda1 when decay is enabled.")
@@ -119,6 +125,10 @@ if __name__ == "__main__":
         logger.info(
             "Distillation extra epochs after curriculum finished: %d",
             max(0, args.distill_extra_epochs_after_curriculum),
+        )
+        logger.info(
+            "Curriculum sample selection uses difficulty sorting: %s",
+            args.use_difficulty_sorting,
         )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
@@ -183,6 +193,7 @@ if __name__ == "__main__":
             lambda1=args.lambda1,
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
+            use_difficulty_sorting=args.use_difficulty_sorting,
         )
         curriculum.initialize(
             batch_size=args.batch_size,
