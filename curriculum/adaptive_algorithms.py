@@ -12,7 +12,8 @@ class Adaptive(BaseCL):
     Adaptive Curriculum Learning. https://openaccess.thecvf.com/content/ICCV2021/papers/Kong_Adaptive_Curriculum_Learning_ICCV_2021_paper.pdf
     """
     def __init__(self, num_classes, pace_p, pace_q, pace_r, inv,
-                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net):
+                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net,
+                 use_difficulty_sorting=True):
         super(Adaptive, self).__init__()
 
         self.name = 'adaptive'
@@ -30,6 +31,7 @@ class Adaptive(BaseCL):
         self.bottom_lambda1 = bottom_lambda1
         self.num_classes = num_classes
         self.pretrained_model = pretrained_net
+        self.use_difficulty_sorting = use_difficulty_sorting
 
 
     def data_prepare(self, loader):
@@ -90,9 +92,13 @@ class Adaptive(BaseCL):
 
             return dataloader
 
-        #根据难度排序，选择前epoch_size个数据进行训练！
-        data_sort = torch.argsort(self.difficulty)
-        self.data_indice = data_sort[0 : self.epoch_size]
+        if self.use_difficulty_sorting:
+            #根据难度排序，选择前epoch_size个数据进行训练！
+            selected_indices = torch.argsort(self.difficulty)[0 : self.epoch_size]
+        else:
+            #不使用排序时，随机选择epoch_size个样本。
+            selected_indices = torch.randperm(self.data_size, device=self.device)[0 : self.epoch_size]
+        self.data_indice = selected_indices
         dataset = Subset(self.dataset, self.data_indice)
         dataloader = DataLoader(
             dataset,
@@ -179,10 +185,12 @@ class Adaptive(BaseCL):
 class AdaptiveTrainer(BaseTrainer):
     def __init__(self, data_name, net_name, device_name, num_epochs, random_seed,
                  num_classes, pace_p, pace_q, pace_r, inv,
-                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net):
+                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net,
+                 use_difficulty_sorting=True):
         
         cl = Adaptive(num_classes, pace_p, pace_q, pace_r, inv,
-                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net)
+                 alpha, lambda1, lambda1_decay, bottom_lambda1, pretrained_net,
+                 use_difficulty_sorting=use_difficulty_sorting)
 
         super(AdaptiveTrainer, self).__init__(
             data_name, net_name, device_name, num_epochs, random_seed, cl)
