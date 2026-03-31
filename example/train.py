@@ -84,7 +84,7 @@ if __name__ == "__main__":
     parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # adaptive curriculum
-    parser.add_argument("--use_adaptive_curriculum", default=False, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
+    parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
         #例如example/checkpoints/03-25_16-15_teacher_model.pt
     parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
