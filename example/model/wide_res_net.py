@@ -14,7 +14,8 @@ class BasicUnit(nn.Module):
             ("2_convolution", nn.Conv2d(channels, channels, (3, 3), stride=1, padding=1, bias=False)),
             ("3_normalization", nn.BatchNorm2d(channels)),
             ("4_activation", nn.ReLU(inplace=True)),
-            ("5_dropout", nn.Dropout(dropout, inplace=True)),
+            ("5_dropout", nn.Dropout(dropout, inplace=False)),
+            #WRN-28-10:FALSE
             ("6_convolution", nn.Conv2d(channels, channels, (3, 3), stride=1, padding=1, bias=False)),
         ]))
 
@@ -33,7 +34,8 @@ class DownsampleUnit(nn.Module):
             ("0_convolution", nn.Conv2d(in_channels, out_channels, (3, 3), stride=stride, padding=1, bias=False)),
             ("1_normalization", nn.BatchNorm2d(out_channels)),
             ("2_activation", nn.ReLU(inplace=True)),
-            ("3_dropout", nn.Dropout(dropout, inplace=True)),
+            ("3_dropout", nn.Dropout(dropout, inplace=False)),
+            #WRN-28-10:False
             ("4_convolution", nn.Conv2d(out_channels, out_channels, (3, 3), stride=1, padding=1, bias=False)),
         ]))
         self.downsample = nn.Conv2d(in_channels, out_channels, (1, 1), stride=stride, padding=0, bias=False)
