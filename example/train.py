@@ -47,6 +47,22 @@ def parse_bool(value):
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
+def get_overridden_args(parser, args):
+    overridden = {}
+    for action in parser._actions:
+        if not action.dest or action.dest == "help":
+            continue
+        if action.default is argparse.SUPPRESS:
+            continue
+        current_value = getattr(args, action.dest, None)
+        if current_value != action.default:
+            overridden[action.dest] = {
+                "current": current_value,
+                "default": action.default,
+            }
+    return overridden
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -100,6 +116,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
     args = parser.parse_args()
+    overridden_args = get_overridden_args(parser, args)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -121,6 +138,10 @@ if __name__ == "__main__":
         args.use_adaptive_curriculum,
         args.teacher_optimizer,
     )
+    if overridden_args:
+        logger.info("Detected non-default CLI args:")
+        for name, value in sorted(overridden_args.items()):
+            logger.info("  --%s: %s (default: %s)", name, value["current"], value["default"])
     if args.use_adaptive_curriculum:
         logger.info(
             "Distillation extra epochs after curriculum finished: %d",
