@@ -75,6 +75,9 @@ if __name__ == "__main__":
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")#WRN-16-8 中的 16 就是 depth，表示网络的深度，即层数。WRN-16-8 是 Wide ResNet 的一个变体，其中 16 表示网络的深度，8 表示宽度因子（width factor）。在 WRN 中，depth 通常是 6n+4 的形式，其中 n 是一个整数，表示每个阶段（stage）中 BasicUnit 的数量。因此，WRN-16-8 中的 depth=16 意味着每个阶段有 2 个 BasicUnit（因为 (16-4)/6=2），总共有 3 个阶段（stage），加上初始卷积层和最后的全连接层，总共是 16 层。
     parser.add_argument("--dropout", default=0.0, type=float, help="Dropout rate.")
     parser.add_argument("--width_factor", default=8, type=int, help="How many times wider compared to normal ResNet.")#比普通ResNet宽多少倍
+    parser.add_argument("--teacher_depth", default=None, type=int, help="Optional teacher WRN depth. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--teacher_dropout", default=None, type=float, help="Optional teacher WRN dropout. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--teacher_width_factor", default=None, type=int, help="Optional teacher WRN width factor. If omitted, teacher reuses student's architecture.")
     #train
     parser.add_argument("--optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Training optimizer: 'sam' (default) or plain 'sgd' for control experiments.")
     parser.add_argument("--epochs", default=200, type=int, help="Total number of epochs.")
@@ -174,7 +177,32 @@ if __name__ == "__main__":
 
         # 与原 SAM 代码保持一致：学生模型仍然是同一个 WideResNet，
         # 课程学习只是在数据采样和loss上做附加，不改模型定义。
-        teacher_model = deepcopy(model)
+        use_custom_teacher_arch = any(
+            value is not None
+            for value in (args.teacher_depth, args.teacher_dropout, args.teacher_width_factor)
+        )
+        if use_custom_teacher_arch:
+            teacher_depth = args.teacher_depth if args.teacher_depth is not None else args.depth
+            teacher_dropout = args.teacher_dropout if args.teacher_dropout is not None else args.dropout
+            teacher_width_factor = (
+                args.teacher_width_factor if args.teacher_width_factor is not None else args.width_factor
+            )
+            teacher_model = WideResNet(
+                teacher_depth,
+                teacher_width_factor,
+                teacher_dropout,
+                in_channels=3,
+                labels=len(dataset.classes),
+            ).to(device)
+            logger.info(
+                "Using custom teacher architecture: depth=%d, width_factor=%d, dropout=%.4f",
+                teacher_depth,
+                teacher_width_factor,
+                teacher_dropout,
+            )
+        else:
+            teacher_model = deepcopy(model)
+            logger.info("Teacher architecture defaults to a deepcopy of student model.")
         if args.teacher_checkpoint:
             teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
             teacher_model.load_state_dict(teacher_state)
