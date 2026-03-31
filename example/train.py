@@ -115,7 +115,7 @@ if __name__ == "__main__":
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
     logger.info(
-        "Effective args: optimizer=%s, adaptive=%s, use_adaptive_curriculum=%s, teacher_optimizer=%s",
+        "Effective args: optimizer=%s(adaptive=%s) || use_adaptive_curriculum=%s, teacher_optimizer=%s",
         args.optimizer,
         args.adaptive,
         args.use_adaptive_curriculum,
