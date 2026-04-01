@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument("--teacher_depth", default=None, type=int, help="Optional teacher WRN depth. If omitted, teacher reuses student's architecture.")
     parser.add_argument("--teacher_dropout", default=None, type=float, help="Optional teacher WRN dropout. If omitted, teacher reuses student's architecture.")
     parser.add_argument("--teacher_width_factor", default=None, type=int, help="Optional teacher WRN width factor. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
     #train
     parser.add_argument("--optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Training optimizer: 'sam' (default) or plain 'sgd' for control experiments.")
     parser.add_argument("--epochs", default=200, type=int, help="Total number of epochs.")
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
         #例如example/checkpoints/03-25_16-15_teacher_model.pt
-    parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
+    
     parser.add_argument("--pace_p", default=0.04, type=float, help="Initial curriculum ratio.")
     parser.add_argument("--pace_q", default=1.1, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
