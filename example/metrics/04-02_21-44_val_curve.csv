@@ -1,0 +1,1 @@
+run_name,method,epoch,cumulative_batches,elapsed_seconds,val_accuracy
