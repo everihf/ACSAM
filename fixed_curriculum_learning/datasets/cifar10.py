@@ -3,6 +3,7 @@
 
 import os
 import download
+from path_config import data_subdir
 import sys
 from six.moves import cPickle
 from keras import backend as K
@@ -22,7 +23,7 @@ class Cifar10(datasets.Dataset.Dataset):
         self.data_url = r"https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 
         # Directory to store the downloaded data.
-        self.data_dir = "./data/cifar10/"
+        self.data_dir = data_subdir("cifar10")
 
         self.height, self.width, self.depth = 32, 32, 3
         self.n_classes = 10

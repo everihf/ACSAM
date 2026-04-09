@@ -16,6 +16,7 @@ from sklearn import svm
 import numpy as np
 import pickle
 import classic_nets_imagenet
+from path_config import DATA_ROOT, data_subdir
 
 
 def _is_valid_feature_matrix(values):
@@ -31,11 +32,10 @@ def _is_valid_feature_matrix(values):
 
 # download the models / datasets
 def get_transfer_values_inception(dataset):
-    data_dir = r'./data/'
-    models.inception.data_dir = os.path.join(data_dir, 'inception/')
-    dataset.data_dir = os.path.join(data_dir, dataset.name + r'/')
-    if not os.path.exists(dataset.data_dir):
-        os.mkdir(dataset.data_dir)
+    data_dir = DATA_ROOT
+    models.inception.data_dir = data_subdir('inception')
+    dataset.data_dir = data_subdir(dataset.name)
+    os.makedirs(dataset.data_dir, exist_ok=True)
     models.inception.maybe_download()
 #    dataset.maybe_download()
     
@@ -169,9 +169,9 @@ def transfer_values_svm_scores(train_x, train_y, test_x, test_y):
     return train_scores, test_scores#用 SVM 计算：每个样本属于各个类别的概率，这个概率值可以用来衡量样本的 difficulty
 
 def svm_scores_exists(dataset, network_name="inception",
-                      alternative_data_dir="."):
+                      alternative_data_dir=None):
     if dataset is None:
-        data_dir = alternative_data_dir
+        data_dir = alternative_data_dir or DATA_ROOT
     else:
         data_dir = dataset.data_dir
     
@@ -192,12 +192,14 @@ def _cached_scores_match_dataset(train_scores, y_train, test_scores, y_test):
 
 def get_svm_scores(transfer_values_train, y_train, transfer_values_test,
                    y_test, dataset, network_name="inception",
-                   alternative_data_dir="."):
+                   alternative_data_dir=None):
     
     if dataset is None:
-        data_dir = alternative_data_dir
+        data_dir = alternative_data_dir or DATA_ROOT
     else:
         data_dir = dataset.data_dir
+
+    os.makedirs(data_dir, exist_ok=True)
     
     svm_train_path = os.path.join(data_dir, network_name + 'svm_train_values.pkl')
     svm_test_path = os.path.join(data_dir, network_name + 'svm_test_values.pkl')
