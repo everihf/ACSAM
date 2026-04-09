@@ -135,3 +135,13 @@ cifar/
 
 # *.csv
 *.pt
+
+# fixed_curriculum_learning generated files
+fixed_curriculum_learning/data/cifar100/cifar-100-python/
+fixed_curriculum_learning/data/inception/
+
+fixed_curriculum_learning/**/*.pkl
+fixed_curriculum_learning/**/*.pb
+fixed_curriculum_learning/**/*.tgz
+fixed_curriculum_learning/**/*.gz
+fixed_curriculum_learning/**/*.jpg
