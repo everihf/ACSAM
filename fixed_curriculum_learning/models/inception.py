@@ -64,6 +64,7 @@ tf = tf.compat.v1
 
 import download
 from cache import cache
+from path_config import data_subdir
 import os
 import sys
 
@@ -75,7 +76,7 @@ import sys
 data_url = "http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz"
 
 # Directory to store the downloaded data.
-data_dir = "inception/"
+data_dir = data_subdir("inception")
 
 # File containing the mappings between class-number and uid. (Downloaded)
 path_uid_to_cls = "imagenet_2012_challenge_label_map_proto.pbtxt"
