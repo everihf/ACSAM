@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import csv
 import importlib.util
 
@@ -10,6 +10,7 @@ from copy import deepcopy
 from zoneinfo import ZoneInfo
 
 from model.wide_res_net import WideResNet
+from model.cifar100_cnn import Cifar100CNN
 from model.smooth_cross_entropy import smooth_crossentropy
 from data.cifar import Cifar
 from utility.log import Log
@@ -17,6 +18,13 @@ from utility.initialize import initialize
 from utility.step_lr import StepLR
 from utility.bypass_bn import enable_running_stats, disable_running_stats
 from utility.adaptive_curriculum import AdaptiveCurriculum
+from utility.fixed_curriculum import (
+    FixedCurriculum,
+    FixedCurriculumConfig,
+    rank_samples_by_confidence,
+    rank_samples_by_inception_svm,
+    balance_order_by_class,
+)
 from utility.teacher_model import pretrain_teacher_model
 from utility.teacher_model import evaluate_accuracy
 from utility.log import build_logger
@@ -63,6 +71,105 @@ def get_overridden_args(parser, args):
     return overridden
 
 
+def build_model(args, model_name, num_classes):
+    if model_name == "wrn":
+        return WideResNet(
+            args.depth,
+            args.width_factor,
+            args.dropout,
+            in_channels=3,
+            labels=num_classes,
+        )
+    if model_name == "cifar100_cnn":
+        return Cifar100CNN(
+            num_classes=num_classes,
+            activation=args.cifar100_activation,
+            dropout_1_rate=args.cifar100_dropout1,
+            dropout_2_rate=args.cifar100_dropout2,
+            batch_norm=args.cifar100_batch_norm,
+        )
+    raise ValueError(f"Unsupported model: {model_name}")
+
+
+def resolve_curriculum_strategy(args):
+    if args.curriculum_strategy is None:
+        return "adaptive" if args.use_adaptive_curriculum else "none"
+    return args.curriculum_strategy
+
+
+def build_teacher_model(args, student_model, num_classes, device, logger):
+    teacher_model_name = args.teacher_model or args.model
+    use_custom_teacher_arch = any(
+        value is not None
+        for value in (args.teacher_depth, args.teacher_dropout, args.teacher_width_factor)
+    )
+    if teacher_model_name == "wrn" and use_custom_teacher_arch:
+        teacher_depth = args.teacher_depth if args.teacher_depth is not None else args.depth
+        teacher_dropout = args.teacher_dropout if args.teacher_dropout is not None else args.dropout
+        teacher_width_factor = (
+            args.teacher_width_factor if args.teacher_width_factor is not None else args.width_factor
+        )
+        teacher_model = WideResNet(
+            teacher_depth,
+            teacher_width_factor,
+            teacher_dropout,
+            in_channels=3,
+            labels=num_classes,
+        )
+        logger.info(
+            "Using custom teacher WRN architecture: depth=%d, width_factor=%d, dropout=%.4f",
+            teacher_depth,
+            teacher_width_factor,
+            teacher_dropout,
+        )
+    else:
+        if teacher_model_name != "wrn" and use_custom_teacher_arch:
+            logger.warning(
+                "Ignoring --teacher_depth/--teacher_dropout/--teacher_width_factor because teacher_model=%s is not WRN.",
+                teacher_model_name,
+            )
+        if args.teacher_model is None:
+            teacher_model = deepcopy(student_model)
+            logger.info("Teacher architecture defaults to a deepcopy of student model.")
+        else:
+            teacher_model = build_model(args, teacher_model_name, num_classes)
+    teacher_model = teacher_model.to(device)
+    logger.info("Teacher architecture: %s", teacher_model_name)
+    return teacher_model
+
+
+def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoint_dir, run_name, log_prefix):
+    teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
+    teacher_logger = build_logger("train.teacher", teacher_log_path)
+    logger.info("Teacher pretraining log file: %s", teacher_log_path)
+
+    teacher_model = build_teacher_model(args, student_model, len(dataset.classes), device, logger)
+    if args.teacher_checkpoint:
+        teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
+        teacher_model.load_state_dict(teacher_state)
+        logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
+    else:
+        teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
+        teacher_model = pretrain_teacher_model(
+            teacher_model=teacher_model,
+            train_loader=dataset.train,
+            test_loader=dataset.test,
+            args=args,
+            device=device,
+            logger=teacher_logger,
+            best_checkpoint_path=teacher_best_checkpoint_path,
+        )
+        if args.save_teacher_checkpoint:
+            logger.info("Saved pretrained teacher checkpoint to %s", teacher_best_checkpoint_path)
+
+    teacher_val_accuracy = evaluate_accuracy(teacher_model, dataset.test, device)
+    logger.info(
+        "Teacher validation accuracy before student training: %.2f%%",
+        teacher_val_accuracy * 100,
+    )
+    return teacher_model
+
+
 if __name__ == "__main__":
     #创建一个用来解析命令行参数的对象，让你的程序可以通过命令行接收输入
     parser = argparse.ArgumentParser()
@@ -72,12 +179,18 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default=100, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
     #model
-    parser.add_argument("--depth", default=16, type=int, help="Number of layers.")#WRN-16-8 中的 16 就是 depth，表示网络的深度，即层数。WRN-16-8 是 Wide ResNet 的一个变体，其中 16 表示网络的深度，8 表示宽度因子（width factor）。在 WRN 中，depth 通常是 6n+4 的形式，其中 n 是一个整数，表示每个阶段（stage）中 BasicUnit 的数量。因此，WRN-16-8 中的 depth=16 意味着每个阶段有 2 个 BasicUnit（因为 (16-4)/6=2），总共有 3 个阶段（stage），加上初始卷积层和最后的全连接层，总共是 16 层。
+    parser.add_argument("--model", default="cifar100_cnn", type=str, choices=["wrn", "cifar100_cnn"], help="Model architecture to train.")
+    parser.add_argument("--depth", default=16, type=int, help="Number of layers.")
     parser.add_argument("--dropout", default=0.0, type=float, help="Dropout rate.")
-    parser.add_argument("--width_factor", default=8, type=int, help="How many times wider compared to normal ResNet.")#比普通ResNet宽多少倍
-    parser.add_argument("--teacher_depth", default=None, type=int, help="Optional teacher WRN depth. If omitted, teacher reuses student's architecture.")
-    parser.add_argument("--teacher_dropout", default=None, type=float, help="Optional teacher WRN dropout. If omitted, teacher reuses student's architecture.")
-    parser.add_argument("--teacher_width_factor", default=None, type=int, help="Optional teacher WRN width factor. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--width_factor", default=8, type=int, help="How many times wider compared to normal ResNet.")
+    parser.add_argument("--cifar100_activation", default="elu", type=str, choices=["elu", "relu", "gelu"], help="Activation used by cifar100_cnn model.")
+    parser.add_argument("--cifar100_dropout1", default=0.25, type=float, help="Dropout after each convolutional stage in cifar100_cnn.")
+    parser.add_argument("--cifar100_dropout2", default=0.5, type=float, help="Dropout before classifier head in cifar100_cnn.")
+    parser.add_argument("--cifar100_batch_norm", default=False, type=parse_bool, help="Enable batch norm layers in cifar100_cnn.")
+    parser.add_argument("--teacher_model", default=None, type=str, choices=["wrn", "cifar100_cnn"], help="Optional teacher architecture. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--teacher_depth", default=None, type=int, help="Optional teacher WRN depth. Effective only when teacher model is WRN.")
+    parser.add_argument("--teacher_dropout", default=None, type=float, help="Optional teacher WRN dropout. Effective only when teacher model is WRN.")
+    parser.add_argument("--teacher_width_factor", default=None, type=int, help="Optional teacher WRN width factor. Effective only when teacher model is WRN.")
     parser.add_argument("--teacher_optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Optimizer used for teacher pretraining when no teacher checkpoint is provided.")
     #train
     parser.add_argument("--optimizer", default="sgd", type=str, choices=["sam", "sgd"], help="Training optimizer: 'sam' (default) or plain 'sgd' for control experiments.")
@@ -87,11 +200,12 @@ if __name__ == "__main__":
     parser.add_argument("--momentum", default=0.9, type=float, help="SGD Momentum.")#v ← μ * v + g, w ← w - lr * v ;g是当前梯度，v是动量，μ是动量系数;当前更新 = 当前梯度 + 过去梯度的累积
     parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
-    # adaptive curriculum
-    parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Enable adaptive curriculum + distillation while keeping SAM/ASAM optimizer.")
+    # curriculum strategy
+    parser.add_argument("--curriculum_strategy", default=None, type=str, choices=["none", "adaptive", "fixed"], help="Curriculum strategy. If omitted, falls back to --use_adaptive_curriculum for backward compatibility.")
+    parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Legacy flag. If --curriculum_strategy is omitted, True->adaptive, False->none.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
-        #例如example/checkpoints/03-25_16-15_teacher_model.pt
-    
+
+    # adaptive curriculum params
     parser.add_argument("--pace_p", default=0.04, type=float, help="Initial curriculum ratio.")
     parser.add_argument("--pace_q", default=1.1, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
@@ -112,6 +226,17 @@ if __name__ == "__main__":
         type=int,
         help="How many extra epochs to keep distillation after curriculum_finished=True. Set 0 to stop distillation immediately when curriculum finishes.",
     )
+    # fixed curriculum params
+    parser.add_argument("--fixed_curriculum_type", default="curriculum", type=str, choices=["curriculum", "anti", "random"], help="Ordering style for fixed curriculum.")
+    parser.add_argument("--fixed_batch_increase", default=100, type=int, help="Every N batches, fixed curriculum increases available sample ratio.")
+    parser.add_argument("--fixed_increase_amount", default=1.9, type=float, help="Exponential growth factor for fixed curriculum sampling ratio.")
+    parser.add_argument("--fixed_starting_percent", default=100 / 2500, type=float, help="Initial visible data ratio for fixed curriculum.")
+    parser.add_argument("--fixed_order_source", default="inception_svm", type=str, choices=["teacher", "student", "inception_svm"], help="Which source to use when computing fixed curriculum ordering scores.")
+    parser.add_argument("--fixed_balance_order", default=True, type=parse_bool, help="Whether to interleave ordering across classes to reduce early class imbalance.")
+    parser.add_argument("--fixed_inception_svm_kernel", default="rbf", type=str, choices=["rbf", "linear", "poly", "sigmoid"], help="SVM kernel for inception_svm fixed ordering.")
+    parser.add_argument("--fixed_inception_svm_c", default=1.0, type=float, help="SVM C for inception_svm fixed ordering.")
+    parser.add_argument("--fixed_inception_svm_gamma", default="scale", type=str, help="SVM gamma for inception_svm fixed ordering.")
+    parser.add_argument("--fixed_inception_svm_cache", default=True, type=parse_bool, help="Whether to cache inception features and SVM scores for inception_svm ordering.")
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
     parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则根据时间戳自动生成。.")
@@ -120,6 +245,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
     args = parser.parse_args()
+    curriculum_strategy = resolve_curriculum_strategy(args)
     overridden_args = get_overridden_args(parser, args)
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -128,25 +254,36 @@ if __name__ == "__main__":
     train_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
-    if args.use_adaptive_curriculum:
+    if curriculum_strategy == "none":
+        student_log_filename = f"{log_prefix}_base.log"
+    elif curriculum_strategy == "adaptive":
         student_log_filename = f"{log_prefix}_student.log"
     else:
-        student_log_filename = f"{log_prefix}_base.log"
+        student_log_filename = f"{log_prefix}_fixed.log"
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
+    if args.curriculum_strategy is not None:
+        legacy_expected = "adaptive" if args.use_adaptive_curriculum else "none"
+        if legacy_expected != curriculum_strategy:
+            logger.info(
+                "Ignoring legacy --use_adaptive_curriculum=%s because --curriculum_strategy=%s was set explicitly.",
+                args.use_adaptive_curriculum,
+                curriculum_strategy,
+            )
     logger.info(
-        "Effective args: optimizer=%s(adaptive=%s) || use_adaptive_curriculum=%s, teacher_optimizer=%s",
+        "Effective args: model=%s, optimizer=%s(adaptive=%s), curriculum_strategy=%s, teacher_optimizer=%s",
+        args.model,
         args.optimizer,
         args.adaptive,
-        args.use_adaptive_curriculum,
+        curriculum_strategy,
         args.teacher_optimizer,
     )
     if overridden_args:
         logger.info("Detected non-default CLI args:")
         for name, value in sorted(overridden_args.items()):
             logger.info("  --%s: %s (default: %s)", name, value["current"], value["default"])
-    if args.use_adaptive_curriculum:
+    if curriculum_strategy == "adaptive":
         logger.info(
             "Distillation extra epochs after curriculum finished: %d",
             max(0, args.distill_extra_epochs_after_curriculum),
@@ -155,82 +292,51 @@ if __name__ == "__main__":
             "Curriculum sample selection uses difficulty sorting: %s",
             args.use_difficulty_sorting,
         )
+    elif curriculum_strategy == "fixed":
+        fixed_data_dir = ROOT_DIR / "data"
+        inception_svm_cache_dir = fixed_data_dir / "inception_svm_cache"
+        logger.info(
+            "Fixed curriculum config: type=%s, source=%s, batch_increase=%d, increase_amount=%.4f, starting_percent=%.4f, balance_order=%s",
+            args.fixed_curriculum_type,
+            args.fixed_order_source,
+            args.fixed_batch_increase,
+            args.fixed_increase_amount,
+            args.fixed_starting_percent,
+            args.fixed_balance_order,
+        )
+        if args.fixed_order_source == "inception_svm":
+            logger.info(
+                "Inception+SVM ordering config: kernel=%s, C=%.4f, gamma=%s, cache=%s, data_dir=%s, cache_dir=%s",
+                args.fixed_inception_svm_kernel,
+                args.fixed_inception_svm_c,
+                args.fixed_inception_svm_gamma,
+                args.fixed_inception_svm_cache,
+                fixed_data_dir,
+                inception_svm_cache_dir,
+            )
     run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
     log = Log(log_each=50, logger=logger)#每 50 个 step 打印一次训练中间结果
-    model = WideResNet(
-        args.depth,
-        args.width_factor,
-        args.dropout,
-        in_channels=3,
-        labels=len(dataset.classes),
-    ).to(device)
-    #WideResnet充当model
+    model = build_model(args, args.model, len(dataset.classes)).to(device)
+    logger.info("Student architecture: %s", args.model)
 
     curriculum = None
-    if args.use_adaptive_curriculum:
-        teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
-        teacher_logger = build_logger("train.teacher", teacher_log_path)
-        logger.info("Teacher pretraining log file: %s", teacher_log_path)
-
-        # 与原 SAM 代码保持一致：学生模型仍然是同一个 WideResNet，
-        # 课程学习只是在数据采样和loss上做附加，不改模型定义。
-        use_custom_teacher_arch = any(
-            value is not None
-            for value in (args.teacher_depth, args.teacher_dropout, args.teacher_width_factor)
-        )
-        if use_custom_teacher_arch:
-            teacher_depth = args.teacher_depth if args.teacher_depth is not None else args.depth
-            teacher_dropout = args.teacher_dropout if args.teacher_dropout is not None else args.dropout
-            teacher_width_factor = (
-                args.teacher_width_factor if args.teacher_width_factor is not None else args.width_factor
-            )
-            teacher_model = WideResNet(
-                teacher_depth,
-                teacher_width_factor,
-                teacher_dropout,
-                in_channels=3,
-                labels=len(dataset.classes),
-            ).to(device)
-            logger.info(
-                "Using custom teacher architecture: depth=%d, width_factor=%d, dropout=%.4f",
-                teacher_depth,
-                teacher_width_factor,
-                teacher_dropout,
-            )
-        else:
-            teacher_model = deepcopy(model)
-            logger.info("Teacher architecture defaults to a deepcopy of student model.")
-        if args.teacher_checkpoint:
-            teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
-            teacher_model.load_state_dict(teacher_state)
-            logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
-        else:
-            teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
-            teacher_model = pretrain_teacher_model(#训练教师模型，并返回
-                teacher_model=teacher_model,
-                train_loader=dataset.train,
-                test_loader=dataset.test,
-                args=args,
-                device=device,
-                logger=teacher_logger,
-                best_checkpoint_path=teacher_best_checkpoint_path,
-            )
-            if args.save_teacher_checkpoint:#模型训练完再保存教师模型
-                logger.info("Saved pretrained teacher checkpoint to %s", teacher_best_checkpoint_path)
-
-        teacher_val_accuracy = evaluate_accuracy(teacher_model, dataset.test, device)
-        logger.info(
-            "Teacher validation accuracy before student training: %.2f%%",
-            teacher_val_accuracy * 100,
+    if curriculum_strategy == "adaptive":
+        teacher_model = prepare_teacher_model(
+            args=args,
+            student_model=model,
+            dataset=dataset,
+            device=device,
+            logger=logger,
+            checkpoint_dir=checkpoint_dir,
+            run_name=run_name,
+            log_prefix=log_prefix,
         )
 
-        #课程类的实例
         curriculum = AdaptiveCurriculum(
-            # 数据仍使用原始 CIFAR 训练集；内部只会包装 index 供课程学习使用。
             train_dataset=dataset.train.dataset,
             teacher_model=teacher_model,
             device=device,
@@ -244,6 +350,82 @@ if __name__ == "__main__":
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
             use_difficulty_sorting=args.use_difficulty_sorting,
+        )
+        curriculum.initialize(
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+        )
+    elif curriculum_strategy == "fixed":
+        if args.fixed_order_source == "teacher":
+            order_model = prepare_teacher_model(
+                args=args,
+                student_model=model,
+                dataset=dataset,
+                device=device,
+                logger=logger,
+                checkpoint_dir=checkpoint_dir,
+                run_name=run_name,
+                log_prefix=log_prefix,
+            )
+        else:
+            if args.fixed_order_source == "student":
+                order_model = deepcopy(model).to(device)
+                logger.info("Using student model snapshot to compute fixed curriculum ordering.")
+                order_model.eval()
+                ordered_indices = rank_samples_by_confidence(
+                    model=order_model,
+                    train_dataset=dataset.train.dataset,
+                    device=device,
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                )
+            else:
+                ordered_indices = rank_samples_by_inception_svm(
+                    train_dataset=dataset.train.dataset,
+                    dataset_name=args.dataset,
+                    device=device,
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                    cache_dir=ROOT_DIR / "data" / "inception_svm_cache",
+                    svm_kernel=args.fixed_inception_svm_kernel,
+                    svm_c=args.fixed_inception_svm_c,
+                    svm_gamma=args.fixed_inception_svm_gamma,
+                    use_cache=args.fixed_inception_svm_cache,
+                )
+                logger.info("Using Inception+SVM transfer ranking for fixed curriculum ordering.")
+        if args.fixed_order_source == "teacher":
+            order_model.eval()
+            ordered_indices = rank_samples_by_confidence(
+                model=order_model,
+                train_dataset=dataset.train.dataset,
+                device=device,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                pin_memory=True,
+            )
+        if args.fixed_balance_order:
+            train_targets = getattr(dataset.train.dataset, "targets", None)
+            if train_targets is not None:
+                ordered_indices = balance_order_by_class(
+                    ordered_indices=ordered_indices,
+                    labels=list(train_targets),
+                    num_classes=len(dataset.classes),
+                )
+            else:
+                logger.warning("Train dataset has no 'targets' attribute; skip fixed curriculum class balancing.")
+
+        curriculum = FixedCurriculum(
+            train_dataset=dataset.train.dataset,
+            ordered_indices=ordered_indices,
+            config=FixedCurriculumConfig(
+                batch_increase=args.fixed_batch_increase,
+                increase_amount=args.fixed_increase_amount,
+                starting_percent=args.fixed_starting_percent,
+                curriculum_type=args.fixed_curriculum_type,
+            ),
         )
         curriculum.initialize(
             batch_size=args.batch_size,
@@ -278,12 +460,16 @@ if __name__ == "__main__":
     default_method_name = args.optimizer
     if args.optimizer == "sam" and args.adaptive:
         default_method_name = "asam"
-    if args.use_adaptive_curriculum:
+    if curriculum_strategy == "adaptive":
         default_method_name = f"{default_method_name}+adaptive_curriculum"
         if args.teacher_optimizer == "sgd":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
         elif args.teacher_optimizer == "sam":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
+    elif curriculum_strategy == "fixed":
+        default_method_name = (
+            f"{default_method_name}+fixed_curriculum-{args.fixed_curriculum_type}-{args.fixed_order_source}"
+        )
     method_name = args.method_name or default_method_name#如果 args.method_name 有值 → 用它  ,否则 → 用 default_method_name
     csv_path = metrics_dir / f"{run_name}_val_curve.csv"
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
@@ -325,7 +511,7 @@ if __name__ == "__main__":
                     curriculum_finished_epoch = epoch + 1
         log.train(len_dataset=len(train_loader))#载入训练集长度
         distillation_enabled = False
-        if curriculum is not None:
+        if curriculum_strategy == "adaptive" and curriculum is not None:
             extra_epochs = max(0, args.distill_extra_epochs_after_curriculum)
             if not curriculum.curriculum_finished:
                 distillation_enabled = True
@@ -348,7 +534,7 @@ if __name__ == "__main__":
                 #把模型里 BatchNorm 层的 momentum 恢复成原来的值，让 BN 继续正常更新 running mean / running var
                 predictions = model(inputs)
                 per_sample_loss = smooth_crossentropy(predictions, targets, smoothing=args.label_smoothing)#标签平滑（Label Smoothing）版交叉熵
-                if curriculum is not None and distillation_enabled:
+                if curriculum_strategy == "adaptive" and curriculum is not None and distillation_enabled:
                     # 课程学习loss：监督损失 + 蒸馏 KL
                     first_loss = curriculum.curriculum_loss(per_sample_loss, predictions, indices)
                 else:
@@ -361,7 +547,7 @@ if __name__ == "__main__":
                 disable_running_stats(model)
                 second_predictions = model(inputs)
                 second_per_sample_loss = smooth_crossentropy(second_predictions, targets, smoothing=args.label_smoothing)
-                if curriculum is not None and distillation_enabled:
+                if curriculum_strategy == "adaptive" and curriculum is not None and distillation_enabled:
                     # second step 保持同样的课程loss，确保 SAM 两步一致。
                     second_loss = curriculum.curriculum_loss(second_per_sample_loss, second_predictions, indices)
                 else:
@@ -372,7 +558,7 @@ if __name__ == "__main__":
             else: # sgd 
                 predictions = model(inputs)
                 per_sample_loss = smooth_crossentropy(predictions, targets, smoothing=args.label_smoothing)#标签平滑（Label Smoothing）版交叉熵
-                if curriculum is not None and distillation_enabled:
+                if curriculum_strategy == "adaptive" and curriculum is not None and distillation_enabled:
                     loss = curriculum.curriculum_loss(per_sample_loss, predictions, indices)
                 else:
                     loss = per_sample_loss.mean()

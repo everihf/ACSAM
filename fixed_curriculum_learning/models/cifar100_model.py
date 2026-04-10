@@ -89,6 +89,7 @@ class Cifar100_Model(ModelLib.ModelLib):
         x = Activation(activation=activation)(x)
 
 
+
         x = Dropout(rate=dropout_2_rate)(x)
         x = Dense(units=n_classes, kernel_regularizer=l2_reg, bias_regularizer=l2_bias_reg)(x)
         if batch_norm:
@@ -97,3 +98,4 @@ class Cifar100_Model(ModelLib.ModelLib):
 
         model = Model(inputs=[input_1], outputs=[x])
         return model
+    
