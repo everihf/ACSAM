@@ -175,7 +175,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--adaptive", default=True, type=parse_bool, help="True if you want to use the Adaptive SAM.")#自适应SAM（ASAM）是SAM的一个变体，它在计算扰动时考虑了每个参数的绝对值。这意味着对于较大的参数，ASAM会施加更大的扰动，而对于较小的参数，扰动则较小。这种自适应机制可以帮助模型更有效地找到平坦的最小值，从而提高泛化性能。
     #数据集
-    parser.add_argument("--dataset", default="cifar100", type=str, choices=["cifar10", "cifar100"], help="Dataset to train on.")
+    parser.add_argument(
+        "--dataset",
+        default="cifar100",
+        type=str,
+        choices=[
+            "cifar10",
+            "cifar100",
+            "cifar100_aquatic_mammals",
+            "cifar100_small_mammals",
+            "cifar100_household_electrical_devices",
+        ],
+        help="Dataset to train on.",
+    )
     parser.add_argument("--batch_size", default=100, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
     #model
