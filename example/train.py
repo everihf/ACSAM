@@ -685,12 +685,13 @@ if __name__ == "__main__":
         epoch_duration_seconds = time.perf_counter() - epoch_start_time
         logger.info(
             "Epoch %d/%d t: %.2fs  (T: %.2fs), "
-            "epoch_batches=%d, val_accuracy=%.2f%%, val_loss=%.4f",
+            "epoch_batches=%d (cumulative_batches=%d), val_accuracy=%.2f%%, val_loss=%.4f",
             epoch + 1,
             args.epochs,
             epoch_duration_seconds,
             elapsed_since_start_seconds,
             epoch_batches,
+            cumulative_batches,
             epoch_val_accuracy * 100,   # ⭐ 这里乘100
             epoch_val_loss,
         )
