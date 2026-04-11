@@ -151,8 +151,8 @@ def resolve_curriculum_strategy(args):
     return args.curriculum_strategy
 
 
-class FixedCurriculumBatchStream:
-    """Epoch-sized iterable that samples batches from fixed curriculum by global batch state."""
+class CurriculumBatchStream:
+    """Epoch-sized iterable that samples batches from curriculum by global batch state."""
 
     def __init__(self, curriculum, batch_size: int, num_batches: int):
         self.curriculum = curriculum
@@ -623,17 +623,20 @@ if __name__ == "__main__":
         ###模型训练
         model.train()
         train_loader = dataset.train
-        if curriculum_strategy == "fixed" and curriculum is not None:
-            train_loader = FixedCurriculumBatchStream(
+        if curriculum_strategy in {"fixed", "adaptive"} and curriculum is not None:
+            train_loader = CurriculumBatchStream(
                 curriculum=curriculum,
                 batch_size=args.batch_size,
                 num_batches=steps_per_epoch,
             )
-            log.train(
-                len_dataset=len(train_loader),
-                reset_step=False,
-                reset_last_steps=False,
-            )
+            if curriculum_strategy == "fixed":
+                log.train(
+                    len_dataset=len(train_loader),
+                    reset_step=False,
+                    reset_last_steps=False,
+                )
+            else:
+                log.train(len_dataset=len(train_loader))
         else:
             if curriculum is not None:
                 if curriculum.curriculum_finished:
@@ -656,6 +659,8 @@ if __name__ == "__main__":
         distillation_enabled = False
         if curriculum_strategy == "adaptive" and curriculum is not None:
             extra_epochs = max(0, args.distill_extra_epochs_after_curriculum)
+            if curriculum.curriculum_finished and curriculum_finished_epoch is None:
+                curriculum_finished_epoch = epoch + 1
             if not curriculum.curriculum_finished:
                 distillation_enabled = True
             elif curriculum_finished_epoch is not None:
@@ -717,6 +722,12 @@ if __name__ == "__main__":
                     num_workers=args.num_workers,
                     pin_memory=True,
                 )
+                if (
+                    curriculum_strategy == "adaptive"
+                    and curriculum_finished_epoch is None
+                    and curriculum.curriculum_finished
+                ):
+                    curriculum_finished_epoch = epoch + 1
 
             cumulative_batches += 1
             epoch_batches += 1
@@ -836,6 +847,4 @@ if __name__ == "__main__":
             logger.exception("Failed to save validation curve plot to %s", plot_path)
     else:
         logger.warning("matplotlib is not available; skipped saving validation curve plot.")
-
-
 

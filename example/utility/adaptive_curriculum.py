@@ -167,6 +167,41 @@ class AdaptiveCurriculum:
             )
         return self._full_loader
 
+    def _current_candidate_indices(self) -> torch.Tensor:
+        if self.curriculum_finished:
+            return torch.arange(self.data_size, device=self.device)
+
+        epoch_size = max(1, self.current_epoch_size())
+        if epoch_size >= self.data_size:
+            self.curriculum_finished = True
+            return torch.arange(self.data_size, device=self.device)
+
+        if self.use_difficulty_sorting:
+            return torch.argsort(self.difficulty)[:epoch_size]
+        return torch.randperm(self.data_size, device=self.device)[:epoch_size]
+
+    def sample_batch(self, batch_size: int):
+        """
+        Sample one training batch using the current global-batch curriculum state.
+        """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}.")
+
+        candidate_indices = self._current_candidate_indices()
+        candidate_count = int(candidate_indices.numel())
+        if candidate_count <= 0:
+            raise RuntimeError("No candidate samples available for adaptive curriculum batch sampling.")
+
+        pick_count = min(batch_size, candidate_count)
+        selected_positions = torch.randperm(candidate_count, device=candidate_indices.device)[:pick_count]
+        selected_indices = candidate_indices[selected_positions].cpu().tolist()
+
+        samples = [self.indexed_dataset[int(sample_idx)] for sample_idx in selected_indices]
+        inputs = torch.stack([sample[0] for sample in samples], dim=0)
+        targets = torch.as_tensor([int(sample[1]) for sample in samples], dtype=torch.long)
+        indices = torch.as_tensor([int(sample[2]) for sample in samples], dtype=torch.long)
+        return inputs, targets, indices
+
     def curriculum_loss(self, per_sample_losses, outputs, indices):
         base_loss = per_sample_losses.mean()
 
