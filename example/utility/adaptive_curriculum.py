@@ -127,11 +127,14 @@ class AdaptiveCurriculum:
         self._initialized = True
 
     def current_epoch_size(self):
-        # epoch_size = N * min(pace_p * pace_q ^ floor(batch / pace_r), 1)
-        growth = self.pace_p * (
-            self.pace_q ** int(math.floor(self.global_batch * (self.batch_size / 100) / self.pace_r))
-        )
-        return int(self.data_size * min(growth, 1.0))
+        # Match fixed-curriculum expansion: expand by global batch milestones.
+        if self.global_batch <= 0:
+            current_percent = self.pace_p
+        else:
+            growth_steps = self.global_batch // max(1, int(self.pace_r))
+            current_percent = self.pace_p * (self.pace_q ** growth_steps)
+        current_percent = min(current_percent, 1.0)
+        return max(1, int(math.ceil(self.data_size * current_percent)))
 
     def build_dataloader(self, batch_size, num_workers, pin_memory):
         if self.curriculum_finished:
