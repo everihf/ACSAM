@@ -120,6 +120,40 @@ class FixedCurriculum:
     def update_after_batch(self, *_, **__):
         self.global_batch += 1
 
+    def _current_candidate_indices(self) -> torch.Tensor:
+        if self.curriculum_finished:
+            return self.ordered_indices
+
+        epoch_size = self.current_epoch_size()
+        if epoch_size >= self.data_size:
+            self.curriculum_finished = True
+            return self.ordered_indices
+        return self.ordered_indices[:epoch_size]
+
+    def sample_batch(self, batch_size: int):
+        """
+        Sample one training batch using the current global-batch curriculum state.
+
+        Sampling is random within the currently visible prefix of ordered indices.
+        """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}.")
+
+        candidate_indices = self._current_candidate_indices()
+        candidate_count = int(candidate_indices.numel())
+        if candidate_count <= 0:
+            raise RuntimeError("No candidate samples available for fixed curriculum batch sampling.")
+
+        pick_count = min(batch_size, candidate_count)
+        selected_positions = torch.randperm(candidate_count)[:pick_count]
+        selected_indices = candidate_indices[selected_positions].tolist()
+
+        samples = [self.indexed_dataset[int(sample_idx)] for sample_idx in selected_indices]
+        inputs = torch.stack([sample[0] for sample in samples], dim=0)
+        targets = torch.as_tensor([int(sample[1]) for sample in samples], dtype=torch.long)
+        indices = torch.as_tensor([int(sample[2]) for sample in samples], dtype=torch.long)
+        return inputs, targets, indices
+
 
 def rank_samples_by_confidence(
     model: torch.nn.Module,

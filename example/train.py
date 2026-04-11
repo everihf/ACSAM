@@ -151,6 +151,22 @@ def resolve_curriculum_strategy(args):
     return args.curriculum_strategy
 
 
+class FixedCurriculumBatchStream:
+    """Epoch-sized iterable that samples batches from fixed curriculum by global batch state."""
+
+    def __init__(self, curriculum, batch_size: int, num_batches: int):
+        self.curriculum = curriculum
+        self.batch_size = int(batch_size)
+        self.num_batches = int(num_batches)
+
+    def __len__(self):
+        return self.num_batches
+
+    def __iter__(self):
+        for _ in range(self.num_batches):
+            yield self.curriculum.sample_batch(self.batch_size)
+
+
 def build_teacher_model(args, student_model, num_classes, device, logger):
     teacher_model_name = args.teacher_model or args.model
     use_custom_teacher_arch = any(
@@ -414,7 +430,8 @@ if __name__ == "__main__":
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
-    log = Log(log_each=50, logger=logger)#每 50 个 step 打印一次训练中间结果
+    train_log_each = 10 if curriculum_strategy == "fixed" else 50
+    log = Log(log_each=train_log_each, logger=logger)
     model = build_model(args, args.model, len(dataset.classes)).to(device)
     logger.info("Student architecture: %s", args.model)
 
@@ -569,6 +586,7 @@ if __name__ == "__main__":
     scheduler = StepLR(optimizer, args.learning_rate, args.epochs)
     cumulative_batches = 0
     val_curve = []
+    steps_per_epoch = len(dataset.train)
 
     metrics_dir = Path(__file__).resolve().parent / args.metrics_dir
     metrics_dir.mkdir(parents=True, exist_ok=True)
@@ -605,26 +623,36 @@ if __name__ == "__main__":
         ###模型训练
         model.train()
         train_loader = dataset.train
-        if curriculum is not None:
-            if curriculum.curriculum_finished:
-                if curriculum_finished_epoch is None:
-                    curriculum_finished_epoch = epoch + 1
-                # 课程扩张到全数据集后，跳过课程采样，直接用全数据集训练。
-                train_loader = curriculum.build_full_dataloader(
-                    batch_size=args.batch_size,
-                    num_workers=args.num_workers,
-                    pin_memory=True,
-                )
-            else:
-                # 每个epoch按当前 difficulty/pace 重新构造课程子集。
-                train_loader = curriculum.build_dataloader(
-                    batch_size=args.batch_size,
-                    num_workers=args.num_workers,
-                    pin_memory=True,
-                )
-                if curriculum.curriculum_finished and curriculum_finished_epoch is None:
-                    curriculum_finished_epoch = epoch + 1
-        log.train(len_dataset=len(train_loader))#载入训练集长度
+        if curriculum_strategy == "fixed" and curriculum is not None:
+            train_loader = FixedCurriculumBatchStream(
+                curriculum=curriculum,
+                batch_size=args.batch_size,
+                num_batches=steps_per_epoch,
+            )
+            log.train(
+                len_dataset=len(train_loader),
+                reset_step=False,
+                reset_last_steps=False,
+            )
+        else:
+            if curriculum is not None:
+                if curriculum.curriculum_finished:
+                    if curriculum_finished_epoch is None:
+                        curriculum_finished_epoch = epoch + 1
+                    train_loader = curriculum.build_full_dataloader(
+                        batch_size=args.batch_size,
+                        num_workers=args.num_workers,
+                        pin_memory=True,
+                    )
+                else:
+                    train_loader = curriculum.build_dataloader(
+                        batch_size=args.batch_size,
+                        num_workers=args.num_workers,
+                        pin_memory=True,
+                    )
+                    if curriculum.curriculum_finished and curriculum_finished_epoch is None:
+                        curriculum_finished_epoch = epoch + 1
+            log.train(len_dataset=len(train_loader))
         distillation_enabled = False
         if curriculum_strategy == "adaptive" and curriculum is not None:
             extra_epochs = max(0, args.distill_extra_epochs_after_curriculum)
@@ -699,7 +727,10 @@ if __name__ == "__main__":
 
         ###模型评估
         model.eval()
-        log.eval(len_dataset=len(dataset.test))
+        if curriculum_strategy == "fixed":
+            log.eval(len_dataset=len(dataset.test), reset_step=False)
+        else:
+            log.eval(len_dataset=len(dataset.test))
         eval_loss_sum = 0.0
         eval_steps = 0
         eval_correct_sum = 0
@@ -805,3 +836,6 @@ if __name__ == "__main__":
             logger.exception("Failed to save validation curve plot to %s", plot_path)
     else:
         logger.warning("matplotlib is not available; skipped saving validation curve plot.")
+
+
+
