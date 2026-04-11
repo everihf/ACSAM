@@ -316,7 +316,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--adaptive_curriculum_type",
-        default=None,
+        default="curriculum",
         type=str,
         choices=["curriculum", "anti", "random"],
         help="Ordering style for adaptive curriculum candidate selection.",
