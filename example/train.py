@@ -71,7 +71,34 @@ def get_overridden_args(parser, args):
     return overridden
 
 
-def apply_model_specific_safe_defaults(args, parser):
+def get_cli_provided_dests(parser, argv=None):
+    """
+    Return argparse destinations that were explicitly provided on CLI.
+
+    This is different from get_overridden_args(): a user may pass an argument
+    with the same value as its parser default (e.g. --learning_rate 0.1), and
+    we still must treat it as user-specified.
+    """
+    tokens = sys.argv[1:] if argv is None else list(argv)
+    option_to_dest = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_to_dest[option] = action.dest
+
+    provided = set()
+    for token in tokens:
+        if token == "--":
+            break
+        if not token.startswith("-") or token == "-":
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest and dest != "help":
+            provided.add(dest)
+    return provided
+
+
+def apply_model_specific_safe_defaults(args, parser, cli_provided_dests=None):
     """
     Apply safer training defaults for cifar100_cnn without affecting WRN.
 
@@ -82,12 +109,15 @@ def apply_model_specific_safe_defaults(args, parser):
     if args.model != "cifar100_cnn":
         return applied
 
+    cli_provided_dests = cli_provided_dests or set()
     safe_defaults = {
         "learning_rate": 0.01,
         "momentum": 0.0,
         "label_smoothing": 0.0,
     }
     for name, value in safe_defaults.items():
+        if name in cli_provided_dests:
+            continue
         if getattr(args, name) == parser.get_default(name):
             setattr(args, name, value)
             applied[name] = value
@@ -281,7 +311,8 @@ if __name__ == "__main__":
     #解析参数
     args = parser.parse_args()
     cli_overridden_args = get_overridden_args(parser, args)
-    applied_safe_defaults = apply_model_specific_safe_defaults(args, parser)
+    cli_provided_dests = get_cli_provided_dests(parser)
+    applied_safe_defaults = apply_model_specific_safe_defaults(args, parser, cli_provided_dests)
     curriculum_strategy = resolve_curriculum_strategy(args)
     overridden_args = cli_overridden_args
 
