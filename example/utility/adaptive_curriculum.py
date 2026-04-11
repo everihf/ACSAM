@@ -268,7 +268,7 @@ class AdaptiveCurriculum:
                 self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
             return
 
-        should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > 500
+        should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > 150
         if should_update_difficulty:
             self._remeasure_difficulty(model, batch_size, num_workers, pin_memory)
 
