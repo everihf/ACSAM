@@ -23,6 +23,7 @@ from utility.fixed_curriculum import (
     FixedCurriculumConfig,
     rank_samples_by_confidence,
     rank_samples_by_inception_svm,
+    build_inception_svm_teacher_logits,
     balance_order_by_class,
 )
 from utility.teacher_model import pretrain_teacher_model
@@ -277,6 +278,14 @@ if __name__ == "__main__":
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
     parser.add_argument(
+        "--adaptive_teacher_source",
+        default="inception_svm",
+        type=str,
+        choices=["inception_svm", "teacher_model"],
+        help="Teacher source for adaptive curriculum distillation. "
+             "'inception_svm' uses fixed-curriculum Inception+SVM pseudo teacher by default.",
+    )
+    parser.add_argument(
         "--use_difficulty_sorting",
         default=True,
         type=parse_bool,
@@ -366,6 +375,18 @@ if __name__ == "__main__":
             "Curriculum sample selection uses difficulty sorting: %s",
             args.use_difficulty_sorting,
         )
+        logger.info(
+            "Adaptive teacher source: %s",
+            args.adaptive_teacher_source,
+        )
+        if args.adaptive_teacher_source == "inception_svm":
+            logger.info(
+                "Adaptive Inception+SVM config: kernel=%s, C=%.4f, gamma=%s, cache=%s",
+                args.fixed_inception_svm_kernel,
+                args.fixed_inception_svm_c,
+                args.fixed_inception_svm_gamma,
+                args.fixed_inception_svm_cache,
+            )
     elif curriculum_strategy == "fixed":
         fixed_data_dir = ROOT_DIR / "data"
         inception_svm_cache_dir = fixed_data_dir / "inception_svm_cache"
@@ -399,20 +420,40 @@ if __name__ == "__main__":
 
     curriculum = None
     if curriculum_strategy == "adaptive":
-        teacher_model = prepare_teacher_model(
-            args=args,
-            student_model=model,
-            dataset=dataset,
-            device=device,
-            logger=logger,
-            checkpoint_dir=checkpoint_dir,
-            run_name=run_name,
-            log_prefix=log_prefix,
-        )
+        teacher_model = None
+        teacher_logits_by_index = None
+        if args.adaptive_teacher_source == "inception_svm":
+            teacher_logits_by_index = build_inception_svm_teacher_logits(
+                train_dataset=dataset.train.dataset,
+                dataset_name=args.dataset,
+                num_classes=len(dataset.classes),
+                device=device,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                pin_memory=True,
+                cache_dir=ROOT_DIR / "data" / "inception_svm_cache",
+                svm_kernel=args.fixed_inception_svm_kernel,
+                svm_c=args.fixed_inception_svm_c,
+                svm_gamma=args.fixed_inception_svm_gamma,
+                use_cache=args.fixed_inception_svm_cache,
+            )
+            logger.info("Using Inception+SVM pseudo teacher logits for adaptive curriculum distillation.")
+        else:
+            teacher_model = prepare_teacher_model(
+                args=args,
+                student_model=model,
+                dataset=dataset,
+                device=device,
+                logger=logger,
+                checkpoint_dir=checkpoint_dir,
+                run_name=run_name,
+                log_prefix=log_prefix,
+            )
 
         curriculum = AdaptiveCurriculum(
             train_dataset=dataset.train.dataset,
             teacher_model=teacher_model,
+            teacher_logits_by_index=teacher_logits_by_index,
             device=device,
             num_classes=len(dataset.classes),
             pace_p=args.pace_p,

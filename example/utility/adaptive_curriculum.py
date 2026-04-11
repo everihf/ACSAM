@@ -24,10 +24,9 @@ class AdaptiveCurriculum:
     """
     Adaptive curriculum scheduler + teacher distillation term.
 
-    This class keeps model/data interfaces identical to the original SAM example:
-    - Same model forward usage.
-    - Same CIFAR dataset (only wraps train dataset with sample indices).
-    - Optional teacher checkpoint from the same architecture.
+    Teacher source can be either:
+    - a neural teacher model (`teacher_model`), or
+    - precomputed per-sample logits (`teacher_logits_by_index`), e.g. Inception+SVM.
     """
 
     def __init__(
@@ -45,6 +44,7 @@ class AdaptiveCurriculum:
         lambda1_decay,
         bottom_lambda1,
         use_difficulty_sorting=True,
+        teacher_logits_by_index=None,
     ):
         self.device = device
         self.num_classes = num_classes
@@ -62,13 +62,27 @@ class AdaptiveCurriculum:
         self.lambda1 = lambda1
         self.lambda1_decay = lambda1_decay
         self.bottom_lambda1 = bottom_lambda1
-        # 防止 bottom_lambda1 > lambda1 时出现“衰减反而升高权重”的情况
-        # 若发生，自动把下界收缩到当前 lambda1。
         if self.bottom_lambda1 > self.lambda1:
             self.bottom_lambda1 = self.lambda1
 
-        self.teacher_model = deepcopy(teacher_model).to(device)
-        self.teacher_model.eval()
+        self.teacher_logits_by_index = None
+        if teacher_logits_by_index is not None:
+            expected_shape = (self.data_size, self.num_classes)
+            if tuple(teacher_logits_by_index.shape) != expected_shape:
+                raise ValueError(
+                    "teacher_logits_by_index shape mismatch: "
+                    f"got {tuple(teacher_logits_by_index.shape)}, expected {expected_shape}."
+                )
+            self.teacher_logits_by_index = teacher_logits_by_index.detach().to(device)
+
+        self.teacher_model = None
+        if teacher_model is not None:
+            self.teacher_model = deepcopy(teacher_model).to(device)
+            self.teacher_model.eval()
+
+        if self.teacher_model is None and self.teacher_logits_by_index is None:
+            raise ValueError("Either teacher_model or teacher_logits_by_index must be provided.")
+
         self.cross_entropy = torch.nn.CrossEntropyLoss(reduction="none")
         self.kl_loss = torch.nn.KLDivLoss(reduction="batchmean")
 
@@ -90,51 +104,47 @@ class AdaptiveCurriculum:
             num_workers=num_workers,
             pin_memory=pin_memory,
         )
-        self.batch_size=batch_size
+        self.batch_size = batch_size
 
         with torch.no_grad():
-            for inputs, targets, indices in loader:
-                inputs = inputs.to(self.device)
-                targets = targets.to(self.device)
-                indices = indices.to(self.device)
+            if self.teacher_logits_by_index is not None:
+                self.pretrained_output.copy_(self.teacher_logits_by_index)
+                for _, targets, indices in loader:
+                    targets = targets.to(self.device)
+                    indices = indices.to(self.device)
+                    logits = self.pretrained_output[indices]
+                    self.difficulty[indices] = self.cross_entropy(logits, targets)
+            else:
+                for inputs, targets, indices in loader:
+                    inputs = inputs.to(self.device)
+                    targets = targets.to(self.device)
+                    indices = indices.to(self.device)
 
-                logits = self.teacher_model(inputs)
-                # 保存教师模型在每个样本上的输出，后续蒸馏直接按 index 对齐读取。
-                self.pretrained_output[indices] = logits
-                # 以教师模型的逐样本交叉熵作为初始难度（越小越“容易”）。
-                self.difficulty[indices] = self.cross_entropy(logits, targets)
+                    logits = self.teacher_model(inputs)
+                    self.pretrained_output[indices] = logits
+                    self.difficulty[indices] = self.cross_entropy(logits, targets)
 
         self._initialized = True
 
     def current_epoch_size(self):
-        # 训练集扩张公式：
         # epoch_size = N * min(pace_p * pace_q ^ floor(batch / pace_r), 1)
-        growth = self.pace_p * (self.pace_q ** int(math.floor(self.global_batch * (self.batch_size / 100) / self.pace_r)))
+        growth = self.pace_p * (
+            self.pace_q ** int(math.floor(self.global_batch * (self.batch_size / 100) / self.pace_r))
+        )
         return int(self.data_size * min(growth, 1.0))
 
     def build_dataloader(self, batch_size, num_workers, pin_memory):
         if self.curriculum_finished:
-            return self.build_full_dataloader(
-                batch_size,
-                num_workers,
-                pin_memory,
-            )
+            return self.build_full_dataloader(batch_size, num_workers, pin_memory)
 
         epoch_size = max(1, self.current_epoch_size())
         if epoch_size >= self.data_size:
-            # 当课程扩张到全训练集后，后续直接使用全量训练集，不再执行课程采样。
             self.curriculum_finished = True
-            return self.build_full_dataloader(
-                batch_size,
-                num_workers,
-                pin_memory,
-            )
+            return self.build_full_dataloader(batch_size, num_workers, pin_memory)
 
         if self.use_difficulty_sorting:
-            # 根据难度排序，优先选择“容易样本”（最小 loss）进入当前课程。
             selected_indices = torch.argsort(self.difficulty)[:epoch_size]
         else:
-            # 不按难度排序时，随机选取 current_epoch_size() 个样本。
             selected_indices = torch.randperm(self.data_size, device=self.device)[:epoch_size]
 
         dataset = Subset(self.indexed_dataset, selected_indices.cpu())
@@ -158,15 +168,12 @@ class AdaptiveCurriculum:
         return self._full_loader
 
     def curriculum_loss(self, per_sample_losses, outputs, indices):
-        # 基础监督损失（与原 SAM 训练一致：逐样本损失再求均值）。
         base_loss = per_sample_losses.mean()
 
         teacher_logits = self.pretrained_output[indices.long()]
         teacher_probs = F.softmax(teacher_logits, dim=1)
         student_log_probs = F.log_softmax(outputs, dim=1)
         kl_div = self.kl_loss(student_log_probs, teacher_probs)
-        # 目标函数 = 监督损失 + lambda1 * 蒸馏 KL。
-        # 其中 lambda1 控制从 teacher 迁移知识的强度。
 
         return base_loss + self.lambda1 * kl_div
 
@@ -178,12 +185,10 @@ class AdaptiveCurriculum:
                 self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
             return
 
-        # 更新难度：每隔 inv 个 batch，且达到 warmup（>500）后执行。
         should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > 500
         if should_update_difficulty:
             self._remeasure_difficulty(model, batch_size, num_workers, pin_memory)
 
-        # 与原 ACL 逻辑一致：lambda1 可随训练逐步衰减到下界。
         if self.global_batch % self.inv == 0 and self.lambda1_decay is not None:
             self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
 
@@ -209,5 +214,4 @@ class AdaptiveCurriculum:
                 current_difficulty[indices] = self.cross_entropy(outputs, targets)
 
         model.train()
-        # 自适应更新难度：difficulty <- (1-alpha)*old + alpha*current
         self.difficulty = (1 - self.alpha) * self.difficulty + self.alpha * current_difficulty

@@ -318,6 +318,101 @@ def rank_samples_by_inception_svm(
     """
     Rank train samples via Inception transfer features + SVM probability of true class.
     """
+    import numpy as np
+
+    scores, classes, targets_np = _compute_inception_svm_scores(
+        train_dataset=train_dataset,
+        dataset_name=dataset_name,
+        device=device,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        cache_dir=cache_dir,
+        svm_kernel=svm_kernel,
+        svm_c=svm_c,
+        svm_gamma=svm_gamma,
+        use_cache=use_cache,
+    )
+
+    class_to_col = {int(cls): idx for idx, cls in enumerate(classes.tolist())}
+    target_cols = np.asarray([class_to_col[int(t)] for t in targets_np], dtype=np.int64)
+    hardness = scores[np.arange(scores.shape[0]), target_cols]
+    ordered = np.argsort(-hardness)
+    return torch.as_tensor(ordered, dtype=torch.long)
+
+
+def build_inception_svm_teacher_logits(
+    train_dataset,
+    dataset_name: str,
+    num_classes: int,
+    device: torch.device,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    cache_dir=None,
+    svm_kernel: str = "rbf",
+    svm_c: float = 1.0,
+    svm_gamma: str = "scale",
+    use_cache: bool = True,
+) -> torch.Tensor:
+    """
+    Build per-sample pseudo teacher logits from Inception features + SVM probabilities.
+
+    Returned tensor shape: [N, num_classes], ordered by dataset sample index.
+    """
+    import numpy as np
+
+    if num_classes <= 0:
+        raise ValueError(f"num_classes must be positive, got {num_classes}.")
+
+    scores, classes, _ = _compute_inception_svm_scores(
+        train_dataset=train_dataset,
+        dataset_name=dataset_name,
+        device=device,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        cache_dir=cache_dir,
+        svm_kernel=svm_kernel,
+        svm_c=svm_c,
+        svm_gamma=svm_gamma,
+        use_cache=use_cache,
+    )
+
+    probs = np.zeros((scores.shape[0], num_classes), dtype=np.float32)
+    for col_idx, class_id in enumerate(classes.tolist()):
+        class_id = int(class_id)
+        if class_id < 0 or class_id >= num_classes:
+            raise ValueError(
+                f"SVM predicted class id {class_id} is outside [0, {num_classes - 1}]."
+            )
+        probs[:, class_id] = scores[:, col_idx].astype(np.float32, copy=False)
+
+    row_sums = probs.sum(axis=1, keepdims=True)
+    row_sums = np.clip(row_sums, a_min=1e-12, a_max=None)
+    probs = probs / row_sums
+
+    logits = torch.log(torch.from_numpy(np.clip(probs, a_min=1e-12, a_max=1.0)))
+    return logits
+
+
+def _compute_inception_svm_scores(
+    train_dataset,
+    dataset_name: str,
+    device: torch.device,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    cache_dir=None,
+    svm_kernel: str = "rbf",
+    svm_c: float = 1.0,
+    svm_gamma: str = "scale",
+    use_cache: bool = True,
+):
+    """
+    Compute (or load cached) per-sample class probabilities from Inception+SVM.
+    Returns: scores[N, C], classes[C], targets[N].
+    """
     try:
         import numpy as np
         from sklearn import svm as sk_svm
@@ -343,11 +438,7 @@ def rank_samples_by_inception_svm(
         _, current_targets = _get_raw_images_and_targets(train_dataset)
         current_targets = np.asarray(current_targets, dtype=np.int64)
         if scores.shape[0] == current_targets.shape[0]:
-            class_to_col = {int(cls): idx for idx, cls in enumerate(svm_classes.tolist())}
-            target_cols = np.asarray([class_to_col[int(t)] for t in current_targets], dtype=np.int64)
-            hardness = scores[np.arange(scores.shape[0]), target_cols]
-            ordered = np.argsort(-hardness)
-            return torch.as_tensor(ordered, dtype=torch.long)
+            return scores, svm_classes, current_targets
 
     if use_cache and feature_cache_path.exists() and target_cache_path.exists():
         features = torch.load(feature_cache_path, map_location="cpu")
@@ -375,8 +466,4 @@ def rank_samples_by_inception_svm(
     if use_cache:
         np.savez_compressed(score_cache_path, scores=scores, classes=classes)
 
-    class_to_col = {int(cls): idx for idx, cls in enumerate(classes.tolist())}
-    target_cols = np.asarray([class_to_col[int(t)] for t in targets_np], dtype=np.int64)
-    hardness = scores[np.arange(scores.shape[0]), target_cols]
-    ordered = np.argsort(-hardness)
-    return torch.as_tensor(ordered, dtype=torch.long)
+    return scores, classes, targets_np
