@@ -44,6 +44,7 @@ class AdaptiveCurriculum:
         lambda1_decay,
         bottom_lambda1,
         use_difficulty_sorting=True,
+        use_balance_order=True,
         teacher_logits_by_index=None,
     ):
         self.device = device
@@ -59,11 +60,23 @@ class AdaptiveCurriculum:
 
         self.alpha = alpha
         self.use_difficulty_sorting = use_difficulty_sorting
+        self.use_balance_order = bool(use_balance_order)
         self.lambda1 = lambda1
         self.lambda1_decay = lambda1_decay
         self.bottom_lambda1 = bottom_lambda1
         if self.bottom_lambda1 > self.lambda1:
             self.bottom_lambda1 = self.lambda1
+
+        labels = getattr(train_dataset, "targets", None)
+        self.class_labels = None
+        if labels is not None:
+            labels_tensor = torch.as_tensor(list(labels), dtype=torch.long)
+            if int(labels_tensor.numel()) == self.data_size:
+                self.class_labels = labels_tensor.to(device)
+            else:
+                self.use_balance_order = False
+        else:
+            self.use_balance_order = False
 
         self.teacher_logits_by_index = None
         if teacher_logits_by_index is not None:
@@ -140,15 +153,10 @@ class AdaptiveCurriculum:
         if self.curriculum_finished:
             return self.build_full_dataloader(batch_size, num_workers, pin_memory)
 
-        epoch_size = max(1, self.current_epoch_size())
-        if epoch_size >= self.data_size:
+        selected_indices = self._current_candidate_indices()
+        if self.curriculum_finished or int(selected_indices.numel()) >= self.data_size:
             self.curriculum_finished = True
             return self.build_full_dataloader(batch_size, num_workers, pin_memory)
-
-        if self.use_difficulty_sorting:
-            selected_indices = torch.argsort(self.difficulty)[:epoch_size]
-        else:
-            selected_indices = torch.randperm(self.data_size, device=self.device)[:epoch_size]
 
         dataset = Subset(self.indexed_dataset, selected_indices.cpu())
         return DataLoader(
@@ -180,8 +188,45 @@ class AdaptiveCurriculum:
             return torch.arange(self.data_size, device=self.device)
 
         if self.use_difficulty_sorting:
-            return torch.argsort(self.difficulty)[:epoch_size]
+            ordered_indices = torch.argsort(self.difficulty)
+            if self.use_balance_order:
+                ordered_indices = self._balance_order_by_class(ordered_indices)
+            return ordered_indices[:epoch_size]
         return torch.randperm(self.data_size, device=self.device)[:epoch_size]
+
+    def _balance_order_by_class(self, ordered_indices: torch.Tensor) -> torch.Tensor:
+        if self.class_labels is None:
+            return ordered_indices
+        if ordered_indices.ndim != 1:
+            return ordered_indices
+
+        ordered_labels = self.class_labels[ordered_indices]
+        class_positions = []
+        for class_id in range(self.num_classes):
+            positions = torch.nonzero(ordered_labels == class_id, as_tuple=False).squeeze(1)
+            class_positions.append(positions)
+
+        max_len = max((int(positions.numel()) for positions in class_positions), default=0)
+        if max_len == 0:
+            return ordered_indices
+
+        interleaved_positions = []
+        for row in range(max_len):
+            row_positions = []
+            for positions in class_positions:
+                if row < positions.numel():
+                    row_positions.append(int(positions[row].item()))
+            row_positions.sort()
+            interleaved_positions.extend(row_positions)
+
+        if not interleaved_positions:
+            return ordered_indices
+        interleaved_positions_tensor = torch.as_tensor(
+            interleaved_positions,
+            dtype=torch.long,
+            device=ordered_indices.device,
+        )
+        return ordered_indices[interleaved_positions_tensor]
 
     def sample_batch(self, batch_size: int):
         """

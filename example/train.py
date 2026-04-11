@@ -289,7 +289,7 @@ if __name__ == "__main__":
 
     # adaptive curriculum params
     parser.add_argument("--pace_p", default=0.04, type=float, help="Initial curriculum ratio.")
-    parser.add_argument("--pace_q", default=1.1, type=float, help="Curriculum growth base.")
+    parser.add_argument("--pace_q", default=1.9, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
@@ -322,7 +322,13 @@ if __name__ == "__main__":
     parser.add_argument("--fixed_increase_amount", default=1.9, type=float, help="Exponential growth factor for fixed curriculum sampling ratio.")
     parser.add_argument("--fixed_starting_percent", default=100 / 2500, type=float, help="Initial visible data ratio for fixed curriculum.")
     parser.add_argument("--fixed_order_source", default="inception_svm", type=str, choices=["teacher", "student", "inception_svm"], help="Which source to use when computing fixed curriculum ordering scores.")
-    parser.add_argument("--fixed_balance_order", default=True, type=parse_bool, help="Whether to interleave ordering across classes to reduce early class imbalance.")
+    parser.add_argument(
+        "--fixed_balance_order",
+        default=True,
+        type=parse_bool,
+        help="Whether to interleave ordering across classes to reduce early class imbalance "
+             "(used by fixed curriculum and adaptive difficulty ordering).",
+    )
     parser.add_argument("--fixed_inception_svm_kernel", default="rbf", type=str, choices=["rbf", "linear", "poly", "sigmoid"], help="SVM kernel for inception_svm fixed ordering.")
     parser.add_argument("--fixed_inception_svm_c", default=1.0, type=float, help="SVM C for inception_svm fixed ordering.")
     parser.add_argument("--fixed_inception_svm_gamma", default="scale", type=str, help="SVM gamma for inception_svm fixed ordering.")
@@ -395,6 +401,10 @@ if __name__ == "__main__":
             "Adaptive teacher source: %s",
             args.adaptive_teacher_source,
         )
+        logger.info(
+            "Adaptive class-balanced ordering (fixed_balance_order): %s",
+            args.fixed_balance_order,
+        )
         if args.adaptive_teacher_source == "inception_svm":
             logger.info(
                 "Adaptive Inception+SVM config: kernel=%s, C=%.4f, gamma=%s, cache=%s",
@@ -437,6 +447,12 @@ if __name__ == "__main__":
 
     curriculum = None
     if curriculum_strategy == "adaptive":
+        adaptive_balance_enabled = bool(args.fixed_balance_order)
+        if adaptive_balance_enabled and not hasattr(dataset.train.dataset, "targets"):
+            adaptive_balance_enabled = False
+            logger.warning(
+                "Adaptive class-balanced ordering requested but train dataset has no 'targets'; disabling it."
+            )
         teacher_model = None
         teacher_logits_by_index = None
         if args.adaptive_teacher_source == "inception_svm":
@@ -482,6 +498,7 @@ if __name__ == "__main__":
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
             use_difficulty_sorting=args.use_difficulty_sorting,
+            use_balance_order=adaptive_balance_enabled,
         )
         curriculum.initialize(
             batch_size=args.batch_size,
