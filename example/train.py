@@ -71,6 +71,29 @@ def get_overridden_args(parser, args):
     return overridden
 
 
+def apply_model_specific_safe_defaults(args, parser):
+    """
+    Apply safer training defaults for cifar100_cnn without affecting WRN.
+
+    Only parameters that still equal parser defaults are overridden, so explicit
+    CLI values from users always take priority.
+    """
+    applied = {}
+    if args.model != "cifar100_cnn":
+        return applied
+
+    safe_defaults = {
+        "learning_rate": 0.01,
+        "momentum": 0.0,
+        "label_smoothing": 0.0,
+    }
+    for name, value in safe_defaults.items():
+        if getattr(args, name) == parser.get_default(name):
+            setattr(args, name, value)
+            applied[name] = value
+    return applied
+
+
 def build_model(args, model_name, num_classes):
     if model_name == "wrn":
         return WideResNet(
@@ -257,8 +280,10 @@ if __name__ == "__main__":
     parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
     #解析参数
     args = parser.parse_args()
+    cli_overridden_args = get_overridden_args(parser, args)
+    applied_safe_defaults = apply_model_specific_safe_defaults(args, parser)
     curriculum_strategy = resolve_curriculum_strategy(args)
-    overridden_args = get_overridden_args(parser, args)
+    overridden_args = cli_overridden_args
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -275,6 +300,12 @@ if __name__ == "__main__":
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
+    if applied_safe_defaults:
+        logger.info(
+            "Applied safe defaults for model=%s on non-overridden args: %s",
+            args.model,
+            ", ".join(f"{k}={v}" for k, v in applied_safe_defaults.items()),
+        )
     if args.curriculum_strategy is not None:
         legacy_expected = "adaptive" if args.use_adaptive_curriculum else "none"
         if legacy_expected != curriculum_strategy:
