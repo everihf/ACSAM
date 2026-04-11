@@ -151,6 +151,12 @@ def resolve_curriculum_strategy(args):
     return args.curriculum_strategy
 
 
+def resolve_adaptive_curriculum_type(args):
+    if args.adaptive_curriculum_type is not None:
+        return str(args.adaptive_curriculum_type).lower()
+    return "curriculum" if args.use_difficulty_sorting else "random"
+
+
 class CurriculumBatchStream:
     """Epoch-sized iterable that samples batches from curriculum by global batch state."""
 
@@ -305,7 +311,15 @@ if __name__ == "__main__":
         "--use_difficulty_sorting",
         default=True,
         type=parse_bool,
-        help="Whether to sort by difficulty when selecting curriculum samples. If False, randomly sample current_epoch_size() samples.",
+        help="Legacy adaptive ordering flag. True->curriculum(easy->hard), False->random. "
+             "Prefer using --adaptive_curriculum_type.",
+    )
+    parser.add_argument(
+        "--adaptive_curriculum_type",
+        default=None,
+        type=str,
+        choices=["curriculum", "anti", "random"],
+        help="Ordering style for adaptive curriculum candidate selection.",
     )
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
     parser.add_argument("--lambda1_decay", default=None, type=float, help="Optional decay step for lambda1 at each inv interval.")
@@ -345,6 +359,7 @@ if __name__ == "__main__":
     cli_provided_dests = get_cli_provided_dests(parser)
     applied_safe_defaults = apply_model_specific_safe_defaults(args, parser, cli_provided_dests)
     curriculum_strategy = resolve_curriculum_strategy(args)
+    adaptive_curriculum_type = resolve_adaptive_curriculum_type(args)
     overridden_args = cli_overridden_args
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -389,6 +404,23 @@ if __name__ == "__main__":
         for name, value in sorted(overridden_args.items()):
             logger.info("  --%s: %s (default: %s)", name, value["current"], value["default"])
     if curriculum_strategy == "adaptive":
+        logger.info(
+            "Adaptive curriculum ordering type: %s",
+            adaptive_curriculum_type,
+        )
+        if args.adaptive_curriculum_type is not None and "use_difficulty_sorting" in cli_provided_dests:
+            legacy_expected_type = "curriculum" if args.use_difficulty_sorting else "random"
+            if legacy_expected_type != adaptive_curriculum_type:
+                logger.info(
+                    "Ignoring legacy --use_difficulty_sorting=%s because --adaptive_curriculum_type=%s was set explicitly.",
+                    args.use_difficulty_sorting,
+                    adaptive_curriculum_type,
+                )
+        elif args.adaptive_curriculum_type is None:
+            logger.info(
+                "Adaptive ordering inferred from legacy --use_difficulty_sorting=%s.",
+                args.use_difficulty_sorting,
+            )
         logger.info(
             "Distillation extra epochs after curriculum finished: %d",
             max(0, args.distill_extra_epochs_after_curriculum),
@@ -497,6 +529,7 @@ if __name__ == "__main__":
             lambda1=args.lambda1,
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
+            curriculum_type=adaptive_curriculum_type,
             use_difficulty_sorting=args.use_difficulty_sorting,
             use_balance_order=adaptive_balance_enabled,
         )
@@ -611,7 +644,7 @@ if __name__ == "__main__":
     if args.optimizer == "sam" and args.adaptive:
         default_method_name = "asam"
     if curriculum_strategy == "adaptive":
-        default_method_name = f"{default_method_name}+adaptive_curriculum"
+        default_method_name = f"{default_method_name}+adaptive_curriculum-{adaptive_curriculum_type}"
         if args.teacher_optimizer == "sgd":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
         elif args.teacher_optimizer == "sam":

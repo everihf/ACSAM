@@ -43,6 +43,7 @@ class AdaptiveCurriculum:
         lambda1,
         lambda1_decay,
         bottom_lambda1,
+        curriculum_type="curriculum",
         use_difficulty_sorting=True,
         use_balance_order=True,
         teacher_logits_by_index=None,
@@ -59,7 +60,14 @@ class AdaptiveCurriculum:
         self.inv = inv
 
         self.alpha = alpha
-        self.use_difficulty_sorting = use_difficulty_sorting
+        # Backward compatibility for older callers that only pass use_difficulty_sorting.
+        self.use_difficulty_sorting = bool(use_difficulty_sorting)
+        if curriculum_type is None:
+            self.curriculum_type = "curriculum" if self.use_difficulty_sorting else "random"
+        else:
+            self.curriculum_type = str(curriculum_type).lower()
+        if self.curriculum_type not in {"curriculum", "anti", "random"}:
+            raise ValueError(f"Unsupported curriculum_type: {self.curriculum_type}")
         self.use_balance_order = bool(use_balance_order)
         self.lambda1 = lambda1
         self.lambda1_decay = lambda1_decay
@@ -187,12 +195,15 @@ class AdaptiveCurriculum:
             self.curriculum_finished = True
             return torch.arange(self.data_size, device=self.device)
 
-        if self.use_difficulty_sorting:
-            ordered_indices = torch.argsort(self.difficulty)
-            if self.use_balance_order:
-                ordered_indices = self._balance_order_by_class(ordered_indices)
-            return ordered_indices[:epoch_size]
-        return torch.randperm(self.data_size, device=self.device)[:epoch_size]
+        if self.curriculum_type == "random":
+            return torch.randperm(self.data_size, device=self.device)[:epoch_size]
+
+        ordered_indices = torch.argsort(self.difficulty)
+        if self.use_balance_order:
+            ordered_indices = self._balance_order_by_class(ordered_indices)
+        if self.curriculum_type == "anti":
+            ordered_indices = torch.flip(ordered_indices, dims=[0])
+        return ordered_indices[:epoch_size]
 
     def _balance_order_by_class(self, ordered_indices: torch.Tensor) -> torch.Tensor:
         if self.class_labels is None:
