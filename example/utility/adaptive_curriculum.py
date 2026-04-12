@@ -22,11 +22,12 @@ class IndexedDataset(Dataset):
 
 class AdaptiveCurriculum:
     """
-    Adaptive curriculum scheduler + teacher distillation term.
+    Adaptive curriculum scheduler with optional teacher distillation.
 
     Teacher source can be either:
     - a neural teacher model (`teacher_model`), or
     - precomputed per-sample logits (`teacher_logits_by_index`), e.g. Inception+SVM.
+    - or disabled entirely (`student_difficulty_only=True`) for self-paced mode.
     """
 
     def __init__(
@@ -47,6 +48,7 @@ class AdaptiveCurriculum:
         use_difficulty_sorting=True,
         use_balance_order=True,
         teacher_logits_by_index=None,
+        student_difficulty_only=False,
     ):
         self.device = device
         self.num_classes = num_classes
@@ -66,14 +68,20 @@ class AdaptiveCurriculum:
             self.curriculum_type = "curriculum" if self.use_difficulty_sorting else "random"
         else:
             self.curriculum_type = str(curriculum_type).lower()
-        if self.curriculum_type not in {"curriculum", "anti", "random"}:
+        if self.curriculum_type not in {"curriculum", "anti", "random", "self_paced"}:
             raise ValueError(f"Unsupported curriculum_type: {self.curriculum_type}")
+        self.student_difficulty_only = bool(student_difficulty_only or self.curriculum_type == "self_paced")
         self.use_balance_order = bool(use_balance_order)
         self.lambda1 = lambda1
         self.lambda1_decay = lambda1_decay
         self.bottom_lambda1 = bottom_lambda1
         if self.bottom_lambda1 > self.lambda1:
             self.bottom_lambda1 = self.lambda1
+        if self.student_difficulty_only:
+            # Self-paced mode intentionally removes teacher distillation.
+            self.lambda1 = 0.0
+            self.lambda1_decay = None
+            self.bottom_lambda1 = 0.0
 
         labels = getattr(train_dataset, "targets", None)
         self.class_labels = None
@@ -101,8 +109,12 @@ class AdaptiveCurriculum:
             self.teacher_model = deepcopy(teacher_model).to(device)
             self.teacher_model.eval()
 
-        if self.teacher_model is None and self.teacher_logits_by_index is None:
-            raise ValueError("Either teacher_model or teacher_logits_by_index must be provided.")
+        self.has_teacher_signal = self.teacher_model is not None or self.teacher_logits_by_index is not None
+        if not self.has_teacher_signal and not self.student_difficulty_only:
+            raise ValueError(
+                "Either teacher_model or teacher_logits_by_index must be provided "
+                "unless student_difficulty_only=True."
+            )
 
         self.cross_entropy = torch.nn.CrossEntropyLoss(reduction="none")
         self.kl_loss = torch.nn.KLDivLoss(reduction="batchmean")
@@ -114,7 +126,7 @@ class AdaptiveCurriculum:
         self._full_loader = None
         self._initialized = False
 
-    def initialize(self, batch_size, num_workers, pin_memory):
+    def initialize(self, batch_size, num_workers, pin_memory, model=None):
         if self._initialized:
             return
 
@@ -127,15 +139,16 @@ class AdaptiveCurriculum:
         )
         self.batch_size = batch_size
 
-        with torch.no_grad():
-            if self.teacher_logits_by_index is not None:
+        if self.teacher_logits_by_index is not None:
+            with torch.no_grad():
                 self.pretrained_output.copy_(self.teacher_logits_by_index)
                 for _, targets, indices in loader:
                     targets = targets.to(self.device)
                     indices = indices.to(self.device)
                     logits = self.pretrained_output[indices]
                     self.difficulty[indices] = self.cross_entropy(logits, targets)
-            else:
+        elif self.teacher_model is not None:
+            with torch.no_grad():
                 for inputs, targets, indices in loader:
                     inputs = inputs.to(self.device)
                     targets = targets.to(self.device)
@@ -144,6 +157,15 @@ class AdaptiveCurriculum:
                     logits = self.teacher_model(inputs)
                     self.pretrained_output[indices] = logits
                     self.difficulty[indices] = self.cross_entropy(logits, targets)
+        else:
+            if model is None:
+                raise ValueError("model must be provided when initializing student_difficulty_only curriculum.")
+            self.difficulty = self._compute_student_difficulty(
+                model=model,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                pin_memory=pin_memory,
+            )
 
         self._initialized = True
 
@@ -263,6 +285,8 @@ class AdaptiveCurriculum:
 
     def curriculum_loss(self, per_sample_losses, outputs, indices):
         base_loss = per_sample_losses.mean()
+        if not self.has_teacher_signal or self.lambda1 <= 0:
+            return base_loss
 
         teacher_logits = self.pretrained_output[indices.long()]
         teacher_probs = F.softmax(teacher_logits, dim=1)
@@ -279,14 +303,15 @@ class AdaptiveCurriculum:
                 self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
             return
 
-        should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > 150
+        warmup_batches = 0 if self.student_difficulty_only else 150
+        should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > warmup_batches
         if should_update_difficulty:
             self._remeasure_difficulty(model, batch_size, num_workers, pin_memory)
 
         if self.global_batch % self.inv == 0 and self.lambda1_decay is not None:
             self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
 
-    def _remeasure_difficulty(self, model, batch_size, num_workers, pin_memory):
+    def _compute_student_difficulty(self, model, batch_size, num_workers, pin_memory):
         loader = DataLoader(
             self.indexed_dataset,
             batch_size=batch_size,
@@ -295,6 +320,7 @@ class AdaptiveCurriculum:
             pin_memory=pin_memory,
         )
 
+        was_training = model.training
         model.eval()
         current_difficulty = torch.zeros(self.data_size, device=self.device)
 
@@ -307,5 +333,15 @@ class AdaptiveCurriculum:
                 outputs = model(inputs)
                 current_difficulty[indices] = self.cross_entropy(outputs, targets)
 
-        model.train()
+        if was_training:
+            model.train()
+        return current_difficulty
+
+    def _remeasure_difficulty(self, model, batch_size, num_workers, pin_memory):
+        current_difficulty = self._compute_student_difficulty(
+            model=model,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
         self.difficulty = (1 - self.alpha) * self.difficulty + self.alpha * current_difficulty

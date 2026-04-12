@@ -289,7 +289,7 @@ if __name__ == "__main__":
     parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # curriculum strategy
-    parser.add_argument("--curriculum_strategy", default=None, type=str, choices=["none", "adaptive", "fixed"], help="Curriculum strategy. If omitted, falls back to --use_adaptive_curriculum for backward compatibility.")
+    parser.add_argument("--curriculum_strategy", default=None, type=str, choices=["none", "adaptive", "fixed", "self_paced"], help="Curriculum strategy. If omitted, falls back to --use_adaptive_curriculum for backward compatibility.")
     parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Legacy flag. If --curriculum_strategy is omitted, True->adaptive, False->none.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
 
@@ -318,7 +318,7 @@ if __name__ == "__main__":
         "--adaptive_curriculum_type",
         default="curriculum",
         type=str,
-        choices=["curriculum", "anti", "random"],
+        choices=["curriculum", "anti", "random", "self_paced"],
         help="Ordering style for adaptive curriculum candidate selection.",
     )
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
@@ -360,6 +360,8 @@ if __name__ == "__main__":
     applied_safe_defaults = apply_model_specific_safe_defaults(args, parser, cli_provided_dests)
     curriculum_strategy = resolve_curriculum_strategy(args)
     adaptive_curriculum_type = resolve_adaptive_curriculum_type(args)
+    if curriculum_strategy == "adaptive" and adaptive_curriculum_type == "self_paced":
+        curriculum_strategy = "self_paced"
     overridden_args = cli_overridden_args
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -370,10 +372,12 @@ if __name__ == "__main__":
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
     if curriculum_strategy == "none":
         student_log_filename = f"{log_prefix}_base.log"
-    elif curriculum_strategy == "adaptive":
+    elif curriculum_strategy in {"adaptive", "self_paced"}:
         student_log_filename = f"{log_prefix}_student.log"
-    else:
+    elif curriculum_strategy == "fixed":
         student_log_filename = f"{log_prefix}_fixed.log"
+    else:
+        student_log_filename = f"{log_prefix}_student.log"
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
@@ -445,6 +449,17 @@ if __name__ == "__main__":
                 args.fixed_inception_svm_gamma,
                 args.fixed_inception_svm_cache,
             )
+    elif curriculum_strategy == "self_paced":
+        logger.info("Self-paced curriculum enabled (student-only difficulty, no teacher distillation).")
+        logger.info(
+            "Self-paced config: pace_p=%.4f, pace_q=%.4f, pace_r=%d, inv=%d, alpha=%.6f, balance_order=%s",
+            args.pace_p,
+            args.pace_q,
+            args.pace_r,
+            1,
+            1.0,
+            args.fixed_balance_order,
+        )
     elif curriculum_strategy == "fixed":
         fixed_data_dir = ROOT_DIR / "data"
         inception_svm_cache_dir = fixed_data_dir / "inception_svm_cache"
@@ -537,6 +552,39 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             pin_memory=True,
+            model=model,
+        )
+    elif curriculum_strategy == "self_paced":
+        adaptive_balance_enabled = bool(args.fixed_balance_order)
+        if adaptive_balance_enabled and not hasattr(dataset.train.dataset, "targets"):
+            adaptive_balance_enabled = False
+            logger.warning(
+                "Self-paced class-balanced ordering requested but train dataset has no 'targets'; disabling it."
+            )
+        curriculum = AdaptiveCurriculum(
+            train_dataset=dataset.train.dataset,
+            teacher_model=None,
+            teacher_logits_by_index=None,
+            device=device,
+            num_classes=len(dataset.classes),
+            pace_p=args.pace_p,
+            pace_q=args.pace_q,
+            pace_r=args.pace_r,
+            inv=1,
+            alpha=1.0,
+            lambda1=0.0,
+            lambda1_decay=None,
+            bottom_lambda1=0.0,
+            curriculum_type="self_paced",
+            use_difficulty_sorting=True,
+            use_balance_order=adaptive_balance_enabled,
+            student_difficulty_only=True,
+        )
+        curriculum.initialize(
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            model=model,
         )
     elif curriculum_strategy == "fixed":
         if args.fixed_order_source == "teacher":
@@ -649,6 +697,8 @@ if __name__ == "__main__":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
         elif args.teacher_optimizer == "sam":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
+    elif curriculum_strategy == "self_paced":
+        default_method_name = f"{default_method_name}+self_paced_curriculum"
     elif curriculum_strategy == "fixed":
         default_method_name = (
             f"{default_method_name}+fixed_curriculum-{args.fixed_curriculum_type}-{args.fixed_order_source}"
@@ -673,7 +723,7 @@ if __name__ == "__main__":
         ###模型训练
         model.train()
         train_loader = dataset.train
-        if curriculum_strategy in {"fixed", "adaptive"} and curriculum is not None:
+        if curriculum_strategy in {"fixed", "adaptive", "self_paced"} and curriculum is not None:
             train_loader = CurriculumBatchStream(
                 curriculum=curriculum,
                 batch_size=args.batch_size,
@@ -773,7 +823,7 @@ if __name__ == "__main__":
                     pin_memory=True,
                 )
                 if (
-                    curriculum_strategy == "adaptive"
+                    curriculum_strategy in {"adaptive", "self_paced"}
                     and curriculum_finished_epoch is None
                     and curriculum.curriculum_finished
                 ):
