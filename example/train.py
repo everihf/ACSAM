@@ -298,6 +298,7 @@ if __name__ == "__main__":
     parser.add_argument("--pace_q", default=1.9, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
+    parser.add_argument("--self_paced_inv", default=10, type=int, help="Difficulty update interval (in batches) used only by self-paced curriculum.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
     parser.add_argument(
         "--adaptive_teacher_source",
@@ -372,8 +373,10 @@ if __name__ == "__main__":
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
     if curriculum_strategy == "none":
         student_log_filename = f"{log_prefix}_base.log"
-    elif curriculum_strategy in {"adaptive", "self_paced"}:
+    elif curriculum_strategy == "adaptive":
         student_log_filename = f"{log_prefix}_student.log"
+    elif curriculum_strategy == "self_paced":
+        student_log_filename = f"{log_prefix}_self-paced.log"
     elif curriculum_strategy == "fixed":
         student_log_filename = f"{log_prefix}_fixed.log"
     else:
@@ -456,7 +459,7 @@ if __name__ == "__main__":
             args.pace_p,
             args.pace_q,
             args.pace_r,
-            1,
+            args.self_paced_inv,
             1.0,
             args.fixed_balance_order,
         )
@@ -570,7 +573,7 @@ if __name__ == "__main__":
             pace_p=args.pace_p,
             pace_q=args.pace_q,
             pace_r=args.pace_r,
-            inv=1,
+            inv=args.self_paced_inv,
             alpha=1.0,
             lambda1=0.0,
             lambda1_decay=None,
