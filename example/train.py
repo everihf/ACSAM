@@ -354,6 +354,7 @@ if __name__ == "__main__":
     parser.add_argument("--method_name", default="", type=str, help="方法标签已保存到指标CSV文件中，以便后续多轮比较.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
     parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
+    parser.add_argument("--seed", default=42, type=int, help="Random seed for reproducible runs.")
     #解析参数
     args = parser.parse_args()
     cli_overridden_args = get_overridden_args(parser, args)
@@ -367,7 +368,7 @@ if __name__ == "__main__":
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-    initialize(args, seed=42)
+    initialize(args, seed=args.seed)
     train_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M")
