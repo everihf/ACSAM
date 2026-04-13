@@ -145,3 +145,6 @@ fixed_curriculum_learning/**/*.pb
 fixed_curriculum_learning/**/*.tgz
 fixed_curriculum_learning/**/*.gz
 fixed_curriculum_learning/**/*.jpg
+
+*.csv
+*.png

@@ -286,7 +286,7 @@ if __name__ == "__main__":
     parser.add_argument("--label_smoothing", default=0.1, type=float, help="Use 0.0 for no label smoothing.")
     parser.add_argument("--learning_rate", default=0.1, type=float, help="Base learning rate at the start of the training.")
     parser.add_argument("--momentum", default=0.9, type=float, help="SGD Momentum.")#v ← μ * v + g, w ← w - lr * v ;g是当前梯度，v是动量，μ是动量系数;当前更新 = 当前梯度 + 过去梯度的累积
-    parser.add_argument("--rho", default=2.0, type=int, help="Rho parameter for SAM.")
+    parser.add_argument("--rho", default=2.0, type=float, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # curriculum strategy
     parser.add_argument("--curriculum_strategy", default=None, type=str, choices=["none", "adaptive", "fixed", "self_paced"], help="Curriculum strategy. If omitted, falls back to --use_adaptive_curriculum for backward compatibility.")
@@ -298,7 +298,7 @@ if __name__ == "__main__":
     parser.add_argument("--pace_q", default=1.9, type=float, help="Curriculum growth base.")
     parser.add_argument("--pace_r", default=100, type=int, help="Curriculum growth interval in batches.")
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
-    parser.add_argument("--self_paced_inv", default=10, type=int, help="Difficulty update interval (in batches) used only by self-paced curriculum.")
+    parser.add_argument("--self_paced_inv", default=50, type=int, help="Difficulty update interval (in batches) used only by self-paced curriculum.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
     parser.add_argument(
         "--adaptive_teacher_source",
