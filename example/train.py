@@ -371,7 +371,7 @@ if __name__ == "__main__":
     initialize(args, seed=args.seed)
     train_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
     train_start_perf = time.perf_counter()
-    log_prefix = train_start_time.strftime("%m-%d_%H-%M")
+    log_prefix = train_start_time.strftime("%m-%d_%H-%M-%S")
     if curriculum_strategy == "none":
         student_log_filename = f"{log_prefix}_base.log"
     elif curriculum_strategy == "adaptive":
@@ -486,7 +486,7 @@ if __name__ == "__main__":
                 fixed_data_dir,
                 inception_svm_cache_dir,
             )
-    run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M")
+    run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M-%S")
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
