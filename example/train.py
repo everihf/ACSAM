@@ -365,7 +365,7 @@ if __name__ == "__main__":
         default=True,
         type=parse_bool,
         help="Whether to interleave ordering across classes to reduce early class imbalance "
-             "(used by fixed curriculum and adaptive difficulty ordering).",
+             "(used by fixed curriculum and adaptive curriculum candidate selection, including random mode).",
     )
     parser.add_argument("--fixed_inception_svm_kernel", default="rbf", type=str, choices=["rbf", "linear", "poly", "sigmoid"], help="SVM kernel for inception_svm fixed ordering.")
     parser.add_argument("--fixed_inception_svm_c", default=1.0, type=float, help="SVM C for inception_svm fixed ordering.")

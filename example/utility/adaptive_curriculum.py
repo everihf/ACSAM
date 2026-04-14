@@ -218,7 +218,10 @@ class AdaptiveCurriculum:
             return torch.arange(self.data_size, device=self.device)
 
         if self.curriculum_type == "random":
-            return torch.randperm(self.data_size, device=self.device)[:epoch_size]
+            random_indices = torch.randperm(self.data_size, device=self.device)
+            if self.use_balance_order:
+                random_indices = self._balance_order_by_class(random_indices)
+            return random_indices[:epoch_size]
 
         ordered_indices = torch.argsort(self.difficulty)
         if self.use_balance_order:
