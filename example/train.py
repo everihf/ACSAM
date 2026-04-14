@@ -350,7 +350,7 @@ if __name__ == "__main__":
     parser.add_argument("--fixed_inception_svm_cache", default=True, type=parse_bool, help="Whether to cache inception features and SVM scores for inception_svm ordering.")
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
-    parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则根据时间戳自动生成。.")
+    parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则自动生成：时间戳+seed。")
     parser.add_argument("--method_name", default="", type=str, help="方法标签已保存到指标CSV文件中，以便后续多轮比较.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
     parser.add_argument("--save_teacher_checkpoint", default=True, type=parse_bool, help="Whether to save teacher checkpoint when it is pretrained from scratch.")
@@ -486,7 +486,7 @@ if __name__ == "__main__":
                 fixed_data_dir,
                 inception_svm_cache_dir,
             )
-    run_name = args.run_name or train_start_time.strftime("%m-%d_%H-%M-%S")
+    run_name = args.run_name or f"{train_start_time.strftime('%m-%d_%H-%M-%S')}_seed{args.seed}"
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
