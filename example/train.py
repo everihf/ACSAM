@@ -215,7 +215,7 @@ def build_teacher_model(args, student_model, num_classes, device, logger):
 
 
 def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoint_dir, run_name, log_prefix):
-    teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher.log"
+    teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher_seed{args.seed}.log"
     teacher_logger = build_logger("train.teacher", teacher_log_path)
     logger.info("Teacher pretraining log file: %s", teacher_log_path)
 
@@ -373,15 +373,15 @@ if __name__ == "__main__":
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M-%S")
     if curriculum_strategy == "none":
-        student_log_filename = f"{log_prefix}_base.log"
+        student_log_filename = f"{log_prefix}_base_seed{args.seed}.log"
     elif curriculum_strategy == "adaptive":
-        student_log_filename = f"{log_prefix}_student.log"
+        student_log_filename = f"{log_prefix}_student_seed{args.seed}.log"
     elif curriculum_strategy == "self_paced":
-        student_log_filename = f"{log_prefix}_self-paced.log"
+        student_log_filename = f"{log_prefix}_self-paced_seed{args.seed}.log"
     elif curriculum_strategy == "fixed":
-        student_log_filename = f"{log_prefix}_fixed.log"
+        student_log_filename = f"{log_prefix}_fixed_seed{args.seed}.log"
     else:
-        student_log_filename = f"{log_prefix}_student.log"
+        student_log_filename = f"{log_prefix}_student_seed{args.seed}.log"
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
