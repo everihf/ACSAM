@@ -125,6 +125,29 @@ def apply_model_specific_safe_defaults(args, parser, cli_provided_dests=None):
     return applied
 
 
+def apply_dataset_specific_inception_svm_defaults(args, parser, cli_provided_dests=None):
+    """
+    Use faster SVM kernel defaults for large/common datasets.
+
+    For cifar100/cifar10, if user did not explicitly pass --fixed_inception_svm_kernel,
+    switch the default kernel from parser default to "linear".
+    """
+    applied = {}
+    cli_provided_dests = cli_provided_dests or set()
+
+    if "fixed_inception_svm_kernel" in cli_provided_dests:
+        return applied
+
+    if args.dataset not in {"cifar100", "cifar10"}:
+        return applied
+
+    if getattr(args, "fixed_inception_svm_kernel", None) == parser.get_default("fixed_inception_svm_kernel"):
+        args.fixed_inception_svm_kernel = "linear"
+        applied["fixed_inception_svm_kernel"] = "linear"
+
+    return applied
+
+
 def build_model(args, model_name, num_classes):
     if model_name == "wrn":
         return WideResNet(
@@ -367,6 +390,7 @@ if __name__ == "__main__":
     cli_overridden_args = get_overridden_args(parser, args)
     cli_provided_dests = get_cli_provided_dests(parser)
     applied_safe_defaults = apply_model_specific_safe_defaults(args, parser, cli_provided_dests)
+    applied_dataset_defaults = apply_dataset_specific_inception_svm_defaults(args, parser, cli_provided_dests)
     curriculum_strategy = resolve_curriculum_strategy(args)
     adaptive_curriculum_type = resolve_adaptive_curriculum_type(args)
     if curriculum_strategy == "adaptive" and adaptive_curriculum_type == "self_paced":
@@ -397,6 +421,12 @@ if __name__ == "__main__":
             "Applied safe defaults for model=%s on non-overridden args: %s",
             args.model,
             ", ".join(f"{k}={v}" for k, v in applied_safe_defaults.items()),
+        )
+    if applied_dataset_defaults:
+        logger.info(
+            "Applied dataset-specific defaults for dataset=%s on non-overridden args: %s",
+            args.dataset,
+            ", ".join(f"{k}={v}" for k, v in applied_dataset_defaults.items()),
         )
     if args.curriculum_strategy is not None:
         legacy_expected = "adaptive" if args.use_adaptive_curriculum else "none"
