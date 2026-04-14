@@ -56,6 +56,18 @@ def parse_args() -> argparse.Namespace:
         help="Legend label used when --aggregate mean is enabled.",
     )
     parser.add_argument(
+        "--every-n",
+        default=1,
+        type=int,
+        help="Keep one point every N points for plotting (N>=1).",
+    )
+    parser.add_argument(
+        "--smooth-window",
+        default=1,
+        type=int,
+        help="Trailing moving-average window size on Y values (>=1).",
+    )
+    parser.add_argument(
         "--output",
         default="example/metrics/compare_val_curves.png",
         help="Output image path.",
@@ -84,7 +96,37 @@ def load_curve(csv_path: Path, x_col: str, y_col: str, label_col: str) -> Tuple[
     return x, y, label
 
 
-def plot_curves(csv_files: List[str], x_col: str, y_col: str, label_col: str, title: str, output: str):
+def _moving_average(values: List[float], window: int) -> List[float]:
+    if window <= 1:
+        return list(values)
+    out: List[float] = []
+    running_sum = 0.0
+    for idx, value in enumerate(values):
+        running_sum += value
+        if idx >= window:
+            running_sum -= values[idx - window]
+            out.append(running_sum / window)
+        else:
+            out.append(running_sum / (idx + 1))
+    return out
+
+
+def _downsample(values: List[float], every_n: int) -> List[float]:
+    if every_n <= 1:
+        return list(values)
+    return values[::every_n]
+
+
+def plot_curves(
+    csv_files: List[str],
+    x_col: str,
+    y_col: str,
+    label_col: str,
+    title: str,
+    output: str,
+    every_n: int,
+    smooth_window: int,
+):
     try:
         import matplotlib.pyplot as plt
     except ModuleNotFoundError as exc:
@@ -95,6 +137,9 @@ def plot_curves(csv_files: List[str], x_col: str, y_col: str, label_col: str, ti
     for file_name in csv_files:
         csv_path = Path(file_name)
         x, y, label = load_curve(csv_path, x_col, y_col, label_col)
+        y = _moving_average(y, smooth_window)
+        x = _downsample(x, every_n)
+        y = _downsample(y, every_n)
         plt.plot(x, y, marker="o", linewidth=1.5, markersize=3, label=label)
 
     plt.xlabel(x_col)
@@ -120,6 +165,8 @@ def plot_mean_curve(
     output: str,
     label: str,
     std_shade: bool,
+    every_n: int,
+    smooth_window: int,
 ):
     try:
         import matplotlib.pyplot as plt
@@ -163,12 +210,18 @@ def plot_mean_curve(
         else:
             std_y.append(0.0)
 
+    mean_y = _moving_average(mean_y, smooth_window)
+    std_y = _moving_average(std_y, smooth_window)
+    plot_x = _downsample(reference_x, every_n)
+    plot_mean_y = _downsample(mean_y, every_n)
+    plot_std_y = _downsample(std_y, every_n)
+
     plt.figure(figsize=(9, 5.5))
-    plt.plot(reference_x, mean_y, marker="o", linewidth=2.0, markersize=3, label=label)
+    plt.plot(plot_x, plot_mean_y, marker="o", linewidth=2.0, markersize=3, label=label)
     if std_shade:
-        lower = [m - s for m, s in zip(mean_y, std_y)]
-        upper = [m + s for m, s in zip(mean_y, std_y)]
-        plt.fill_between(reference_x, lower, upper, alpha=0.2, label=f"{label} +/- std")
+        lower = [m - s for m, s in zip(plot_mean_y, plot_std_y)]
+        upper = [m + s for m, s in zip(plot_mean_y, plot_std_y)]
+        plt.fill_between(plot_x, lower, upper, alpha=0.2, label=f"{label} +/- std")
 
     plt.xlabel(x_col)
     plt.ylabel(y_col)
@@ -186,6 +239,11 @@ def plot_mean_curve(
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.every_n < 1:
+        raise ValueError("--every-n must be >= 1.")
+    if args.smooth_window < 1:
+        raise ValueError("--smooth-window must be >= 1.")
+
     if args.aggregate == "mean":
         plot_mean_curve(
             csv_files=args.csv_files,
@@ -195,6 +253,8 @@ if __name__ == "__main__":
             output=args.output,
             label=args.label,
             std_shade=args.std_shade,
+            every_n=args.every_n,
+            smooth_window=args.smooth_window,
         )
     else:
         plot_curves(
@@ -204,4 +264,6 @@ if __name__ == "__main__":
             label_col=args.label_col,
             title=args.title,
             output=args.output,
+            every_n=args.every_n,
+            smooth_window=args.smooth_window,
         )
