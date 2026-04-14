@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
+import warnings
 
 import torch
 import torch.nn as nn
@@ -348,6 +349,7 @@ def rank_samples_by_inception_svm(
     svm_c: float = 1.0,
     svm_gamma: str = "scale",
     use_cache: bool = True,
+    svm_backend: str = "auto",
 ) -> torch.Tensor:
     """
     Rank train samples via Inception transfer features + SVM probability of true class.
@@ -366,6 +368,7 @@ def rank_samples_by_inception_svm(
         svm_c=svm_c,
         svm_gamma=svm_gamma,
         use_cache=use_cache,
+        svm_backend=svm_backend,
     )
 
     class_to_col = {int(cls): idx for idx, cls in enumerate(classes.tolist())}
@@ -388,6 +391,7 @@ def build_inception_svm_teacher_logits(
     svm_c: float = 1.0,
     svm_gamma: str = "scale",
     use_cache: bool = True,
+    svm_backend: str = "auto",
 ) -> torch.Tensor:
     """
     Build per-sample pseudo teacher logits from Inception features + SVM probabilities.
@@ -411,6 +415,7 @@ def build_inception_svm_teacher_logits(
         svm_c=svm_c,
         svm_gamma=svm_gamma,
         use_cache=use_cache,
+        svm_backend=svm_backend,
     )
 
     probs = np.zeros((scores.shape[0], num_classes), dtype=np.float32)
@@ -430,6 +435,82 @@ def build_inception_svm_teacher_logits(
     return logits
 
 
+def _to_numpy_array(value, np):
+    if isinstance(value, np.ndarray):
+        return value
+    if hasattr(value, "get"):
+        return value.get()
+    return np.asarray(value)
+
+
+def _fit_svm_predict_proba(
+    features_np,
+    targets_np,
+    svm_kernel: str,
+    svm_c: float,
+    svm_gamma: str,
+    svm_backend: str,
+):
+    import numpy as np
+
+    backend = str(svm_backend).lower()
+    if backend not in {"auto", "cuml", "sklearn"}:
+        raise ValueError(
+            f"Unsupported svm_backend={svm_backend}. Expected one of: auto, cuml, sklearn."
+        )
+
+    backends = ["cuml", "sklearn"] if backend == "auto" else [backend]
+    last_exc = None
+
+    for current_backend in backends:
+        if current_backend == "cuml":
+            try:
+                import cupy as cp
+                from cuml.svm import SVC as cuSVC
+
+                features_gpu = cp.asarray(features_np, dtype=cp.float32)
+                targets_gpu = cp.asarray(targets_np, dtype=cp.int32)
+                clf = cuSVC(
+                    probability=True,
+                    kernel=svm_kernel,
+                    C=float(svm_c),
+                    gamma=svm_gamma,
+                )
+                clf.fit(features_gpu, targets_gpu)
+                scores = _to_numpy_array(clf.predict_proba(features_gpu), np).astype(np.float32, copy=False)
+                classes = _to_numpy_array(clf.classes_, np).astype(np.int64, copy=False)
+                return scores, classes, "cuml"
+            except Exception as exc:  # pragma: no cover - depends on local CUDA/cuml runtime
+                last_exc = exc
+                if backend == "cuml":
+                    raise RuntimeError(
+                        "Failed to run GPU SVM with cuML. "
+                        "Please ensure RAPIDS cuML/cupy are installed and CUDA-compatible."
+                    ) from exc
+                warnings.warn(
+                    f"cuML backend unavailable ({exc}); falling back to sklearn SVM.",
+                    RuntimeWarning,
+                )
+                continue
+
+        if current_backend == "sklearn":
+            try:
+                from sklearn import svm as sk_svm
+            except ImportError as exc:
+                last_exc = exc
+                raise RuntimeError(
+                    "scikit-learn is required for sklearn SVM backend. Install scikit-learn first."
+                ) from exc
+
+            clf = sk_svm.SVC(probability=True, kernel=svm_kernel, C=svm_c, gamma=svm_gamma)
+            clf.fit(features_np, targets_np)
+            scores = clf.predict_proba(features_np).astype(np.float32, copy=False)
+            classes = np.asarray(clf.classes_, dtype=np.int64)
+            return scores, classes, "sklearn"
+
+    raise RuntimeError("No available SVM backend.") from last_exc
+
+
 def _compute_inception_svm_scores(
     train_dataset,
     dataset_name: str,
@@ -442,6 +523,7 @@ def _compute_inception_svm_scores(
     svm_c: float = 1.0,
     svm_gamma: str = "scale",
     use_cache: bool = True,
+    svm_backend: str = "auto",
 ):
     """
     Compute (or load cached) per-sample class probabilities from Inception+SVM.
@@ -449,15 +531,15 @@ def _compute_inception_svm_scores(
     """
     try:
         import numpy as np
-        from sklearn import svm as sk_svm
     except ImportError as exc:
-        raise RuntimeError(
-            "scikit-learn is required for inception_svm ordering. Install scikit-learn first."
-        ) from exc
+        raise RuntimeError("numpy is required for inception_svm ordering.") from exc
 
     cache_root = Path(cache_dir) if cache_dir is not None else (_get_project_data_dir() / "inception_svm_cache")
     cache_root.mkdir(parents=True, exist_ok=True)
-    cache_tag = f"{dataset_name}_k{svm_kernel}_c{str(svm_c).replace('.', 'p')}_g{str(svm_gamma)}"
+    cache_tag = (
+        f"{dataset_name}_b{str(svm_backend).lower()}_k{svm_kernel}"
+        f"_c{str(svm_c).replace('.', 'p')}_g{str(svm_gamma)}"
+    )
     feature_cache_path = cache_root / f"inception_features_{dataset_name}.pt"
     target_cache_path = cache_root / f"inception_targets_{dataset_name}.pt"
     score_cache_path = cache_root / f"inception_svm_scores_{cache_tag}.npz"
@@ -493,10 +575,14 @@ def _compute_inception_svm_scores(
     features_np = features.numpy()
     targets_np = targets.numpy().astype("int64")
 
-    clf = sk_svm.SVC(probability=True, kernel=svm_kernel, C=svm_c, gamma=svm_gamma)
-    clf.fit(features_np, targets_np)
-    scores = clf.predict_proba(features_np)
-    classes = clf.classes_
+    scores, classes, _ = _fit_svm_predict_proba(
+        features_np=features_np,
+        targets_np=targets_np,
+        svm_kernel=svm_kernel,
+        svm_c=svm_c,
+        svm_gamma=svm_gamma,
+        svm_backend=svm_backend,
+    )
     if use_cache:
         np.savez_compressed(score_cache_path, scores=scores, classes=classes)
 

@@ -347,6 +347,13 @@ if __name__ == "__main__":
     parser.add_argument("--fixed_inception_svm_kernel", default="rbf", type=str, choices=["rbf", "linear", "poly", "sigmoid"], help="SVM kernel for inception_svm fixed ordering.")
     parser.add_argument("--fixed_inception_svm_c", default=1.0, type=float, help="SVM C for inception_svm fixed ordering.")
     parser.add_argument("--fixed_inception_svm_gamma", default="scale", type=str, help="SVM gamma for inception_svm fixed ordering.")
+    parser.add_argument(
+        "--fixed_inception_svm_backend",
+        default="auto",
+        type=str,
+        choices=["auto", "cuml", "sklearn"],
+        help="SVM backend for inception_svm ordering. auto=prefer cuML(GPU), fallback sklearn(CPU).",
+    )
     parser.add_argument("--fixed_inception_svm_cache", default=True, type=parse_bool, help="Whether to cache inception features and SVM scores for inception_svm ordering.")
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
@@ -447,7 +454,8 @@ if __name__ == "__main__":
         )
         if args.adaptive_teacher_source == "inception_svm":
             logger.info(
-                "Adaptive Inception+SVM config: kernel=%s, C=%.4f, gamma=%s, cache=%s",
+                "Adaptive Inception+SVM config: backend=%s, kernel=%s, C=%.4f, gamma=%s, cache=%s",
+                args.fixed_inception_svm_backend,
                 args.fixed_inception_svm_kernel,
                 args.fixed_inception_svm_c,
                 args.fixed_inception_svm_gamma,
@@ -478,7 +486,8 @@ if __name__ == "__main__":
         )
         if args.fixed_order_source == "inception_svm":
             logger.info(
-                "Inception+SVM ordering config: kernel=%s, C=%.4f, gamma=%s, cache=%s, data_dir=%s, cache_dir=%s",
+                "Inception+SVM ordering config: backend=%s, kernel=%s, C=%.4f, gamma=%s, cache=%s, data_dir=%s, cache_dir=%s",
+                args.fixed_inception_svm_backend,
                 args.fixed_inception_svm_kernel,
                 args.fixed_inception_svm_c,
                 args.fixed_inception_svm_gamma,
@@ -520,6 +529,7 @@ if __name__ == "__main__":
                 svm_c=args.fixed_inception_svm_c,
                 svm_gamma=args.fixed_inception_svm_gamma,
                 use_cache=args.fixed_inception_svm_cache,
+                svm_backend=args.fixed_inception_svm_backend,
             )
             logger.info("Using Inception+SVM pseudo teacher logits for adaptive curriculum distillation.")
         else:
@@ -628,6 +638,7 @@ if __name__ == "__main__":
                     svm_c=args.fixed_inception_svm_c,
                     svm_gamma=args.fixed_inception_svm_gamma,
                     use_cache=args.fixed_inception_svm_cache,
+                    svm_backend=args.fixed_inception_svm_backend,
                 )
                 logger.info("Using Inception+SVM transfer ranking for fixed curriculum ordering.")
         if args.fixed_order_source == "teacher":
