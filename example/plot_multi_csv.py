@@ -1,5 +1,6 @@
 import argparse
 import csv
+import math
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -36,6 +37,23 @@ def parse_args() -> argparse.Namespace:
         "--title",
         default="Validation Curves Comparison",
         help="Figure title.",
+    )
+    parser.add_argument(
+        "--aggregate",
+        default="none",
+        choices=["none", "mean"],
+        help="Aggregation mode across input CSV files. 'none' plots each file; 'mean' plots mean curve aligned by X.",
+    )
+    parser.add_argument(
+        "--std-shade",
+        default=False,
+        action="store_true",
+        help="When --aggregate mean is used, draw mean +/- std shaded band.",
+    )
+    parser.add_argument(
+        "--label",
+        default="mean",
+        help="Legend label used when --aggregate mean is enabled.",
     )
     parser.add_argument(
         "--output",
@@ -94,13 +112,96 @@ def plot_curves(csv_files: List[str], x_col: str, y_col: str, label_col: str, ti
     print(f"Saved figure to: {output_path}")
 
 
+def plot_mean_curve(
+    csv_files: List[str],
+    x_col: str,
+    y_col: str,
+    title: str,
+    output: str,
+    label: str,
+    std_shade: bool,
+):
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("matplotlib is required to draw plots. Install it first, e.g. `pip install matplotlib`.") from exc
+
+    curves: List[Tuple[List[float], List[float]]] = []
+    for file_name in csv_files:
+        csv_path = Path(file_name)
+        x, y, _ = load_curve(csv_path, x_col, y_col, label_col="run_name")
+        curves.append((x, y))
+
+    if not curves:
+        raise ValueError("No curves provided.")
+
+    reference_x = curves[0][0]
+    for idx, (x, _) in enumerate(curves[1:], start=2):
+        if len(x) != len(reference_x):
+            raise ValueError(
+                f"CSV #{idx} has different length ({len(x)}) from first CSV ({len(reference_x)}). "
+                "Please ensure all seeds have the same x-axis points."
+            )
+        for j, (a, b) in enumerate(zip(reference_x, x)):
+            if not math.isclose(a, b, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(
+                    f"CSV #{idx} x-axis mismatch at position {j}: {b} != {a}. "
+                    "Please ensure all seeds share the same x-axis values."
+                )
+
+    point_count = len(reference_x)
+    curve_count = len(curves)
+    mean_y: List[float] = []
+    std_y: List[float] = []
+    for point_idx in range(point_count):
+        values = [curves[curve_idx][1][point_idx] for curve_idx in range(curve_count)]
+        avg = sum(values) / curve_count
+        mean_y.append(avg)
+        if curve_count > 1:
+            var = sum((v - avg) ** 2 for v in values) / curve_count
+            std_y.append(math.sqrt(var))
+        else:
+            std_y.append(0.0)
+
+    plt.figure(figsize=(9, 5.5))
+    plt.plot(reference_x, mean_y, marker="o", linewidth=2.0, markersize=3, label=label)
+    if std_shade:
+        lower = [m - s for m, s in zip(mean_y, std_y)]
+        upper = [m + s for m, s in zip(mean_y, std_y)]
+        plt.fill_between(reference_x, lower, upper, alpha=0.2, label=f"{label} +/- std")
+
+    plt.xlabel(x_col)
+    plt.ylabel(y_col)
+    plt.title(title)
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+    print(f"Saved figure to: {output_path}")
+
+
 if __name__ == "__main__":
     args = parse_args()
-    plot_curves(
-        csv_files=args.csv_files,
-        x_col=args.x,
-        y_col=args.y,
-        label_col=args.label_col,
-        title=args.title,
-        output=args.output,
-    )
+    if args.aggregate == "mean":
+        plot_mean_curve(
+            csv_files=args.csv_files,
+            x_col=args.x,
+            y_col=args.y,
+            title=args.title,
+            output=args.output,
+            label=args.label,
+            std_shade=args.std_shade,
+        )
+    else:
+        plot_curves(
+            csv_files=args.csv_files,
+            x_col=args.x,
+            y_col=args.y,
+            label_col=args.label_col,
+            title=args.title,
+            output=args.output,
+        )
