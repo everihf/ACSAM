@@ -41,19 +41,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--aggregate",
         default="none",
-        choices=["none", "mean"],
-        help="Aggregation mode across input CSV files. 'none' plots each file; 'mean' plots mean curve aligned by X.",
+        choices=["none", "mean", "mean_by_label"],
+        help="Aggregation mode across input CSV files. "
+             "'none' plots each file; 'mean' plots one mean curve across all files; "
+             "'mean_by_label' groups by --label-col and plots one mean curve per group.",
     )
     parser.add_argument(
         "--std-shade",
         default=False,
         action="store_true",
-        help="When --aggregate mean is used, draw mean +/- std shaded band.",
+        help="When using aggregated mode, draw mean +/- std shaded band.",
     )
     parser.add_argument(
         "--label",
         default="mean",
-        help="Legend label used when --aggregate mean is enabled.",
+        help="Legend label used only when --aggregate mean is enabled.",
     )
     parser.add_argument(
         "--every-n",
@@ -237,6 +239,99 @@ def plot_mean_curve(
     print(f"Saved figure to: {output_path}")
 
 
+def _validate_x_alignment(curves: List[Tuple[List[float], List[float]]], group_name: str):
+    if not curves:
+        raise ValueError(f"No curves found for group '{group_name}'.")
+    reference_x = curves[0][0]
+    for idx, (x, _) in enumerate(curves[1:], start=2):
+        if len(x) != len(reference_x):
+            raise ValueError(
+                f"Group '{group_name}' CSV #{idx} has different length ({len(x)}) from first CSV ({len(reference_x)}). "
+                "Please ensure all seeds in the same mode have the same x-axis points."
+            )
+        for j, (a, b) in enumerate(zip(reference_x, x)):
+            if not math.isclose(a, b, rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError(
+                    f"Group '{group_name}' CSV #{idx} x-axis mismatch at position {j}: {b} != {a}. "
+                    "Please ensure all seeds in the same mode share the same x-axis values."
+                )
+
+
+def _compute_mean_std(curves: List[Tuple[List[float], List[float]]]) -> Tuple[List[float], List[float], List[float]]:
+    reference_x = curves[0][0]
+    point_count = len(reference_x)
+    curve_count = len(curves)
+    mean_y: List[float] = []
+    std_y: List[float] = []
+    for point_idx in range(point_count):
+        values = [curves[curve_idx][1][point_idx] for curve_idx in range(curve_count)]
+        avg = sum(values) / curve_count
+        mean_y.append(avg)
+        if curve_count > 1:
+            var = sum((v - avg) ** 2 for v in values) / curve_count
+            std_y.append(math.sqrt(var))
+        else:
+            std_y.append(0.0)
+    return reference_x, mean_y, std_y
+
+
+def plot_mean_curves_by_label(
+    csv_files: List[str],
+    x_col: str,
+    y_col: str,
+    label_col: str,
+    title: str,
+    output: str,
+    std_shade: bool,
+    every_n: int,
+    smooth_window: int,
+):
+    try:
+        import matplotlib.pyplot as plt
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("matplotlib is required to draw plots. Install it first, e.g. `pip install matplotlib`.") from exc
+
+    grouped_curves: Dict[str, List[Tuple[List[float], List[float]]]] = {}
+    for file_name in csv_files:
+        csv_path = Path(file_name)
+        x, y, label = load_curve(csv_path, x_col, y_col, label_col=label_col)
+        grouped_curves.setdefault(label, []).append((x, y))
+
+    if not grouped_curves:
+        raise ValueError("No curves provided.")
+
+    plt.figure(figsize=(9, 5.5))
+    for group_label in sorted(grouped_curves.keys()):
+        curves = grouped_curves[group_label]
+        _validate_x_alignment(curves, group_name=group_label)
+        reference_x, mean_y, std_y = _compute_mean_std(curves)
+
+        mean_y = _moving_average(mean_y, smooth_window)
+        std_y = _moving_average(std_y, smooth_window)
+        plot_x = _downsample(reference_x, every_n)
+        plot_mean_y = _downsample(mean_y, every_n)
+        plot_std_y = _downsample(std_y, every_n)
+
+        line = plt.plot(plot_x, plot_mean_y, marker="o", linewidth=2.0, markersize=3, label=group_label)[0]
+        if std_shade:
+            lower = [m - s for m, s in zip(plot_mean_y, plot_std_y)]
+            upper = [m + s for m, s in zip(plot_mean_y, plot_std_y)]
+            plt.fill_between(plot_x, lower, upper, alpha=0.15, color=line.get_color())
+
+    plt.xlabel(x_col)
+    plt.ylabel(y_col)
+    plt.title(title)
+    plt.grid(alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=200)
+    plt.close()
+    print(f"Saved figure to: {output_path}")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.every_n < 1:
@@ -252,6 +347,18 @@ if __name__ == "__main__":
             title=args.title,
             output=args.output,
             label=args.label,
+            std_shade=args.std_shade,
+            every_n=args.every_n,
+            smooth_window=args.smooth_window,
+        )
+    elif args.aggregate == "mean_by_label":
+        plot_mean_curves_by_label(
+            csv_files=args.csv_files,
+            x_col=args.x,
+            y_col=args.y,
+            label_col=args.label_col,
+            title=args.title,
+            output=args.output,
             std_shade=args.std_shade,
             every_n=args.every_n,
             smooth_window=args.smooth_window,
