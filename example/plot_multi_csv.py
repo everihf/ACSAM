@@ -58,6 +58,13 @@ def parse_args() -> argparse.Namespace:
         help="Legend label used only when --aggregate mean is enabled.",
     )
     parser.add_argument(
+        "--label-map",
+        nargs="*",
+        default=[],
+        help="Optional exact label remapping entries in OLD=NEW format. "
+             "Applied to legend labels; in --aggregate mean_by_label it is also used for grouping.",
+    )
+    parser.add_argument(
         "--every-n",
         default=1,
         type=int,
@@ -119,6 +126,20 @@ def _downsample(values: List[float], every_n: int) -> List[float]:
     return values[::every_n]
 
 
+def _parse_label_map(entries: List[str]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for entry in entries:
+        if "=" not in entry:
+            raise ValueError(f"Invalid --label-map entry: '{entry}'. Expected OLD=NEW.")
+        old, new = entry.split("=", 1)
+        old = old.strip()
+        new = new.strip()
+        if not old:
+            raise ValueError(f"Invalid --label-map entry: '{entry}'. OLD label cannot be empty.")
+        mapping[old] = new
+    return mapping
+
+
 def plot_curves(
     csv_files: List[str],
     x_col: str,
@@ -128,6 +149,7 @@ def plot_curves(
     output: str,
     every_n: int,
     smooth_window: int,
+    label_map: Dict[str, str],
 ):
     try:
         import matplotlib.pyplot as plt
@@ -139,6 +161,7 @@ def plot_curves(
     for file_name in csv_files:
         csv_path = Path(file_name)
         x, y, label = load_curve(csv_path, x_col, y_col, label_col)
+        label = label_map.get(label, label)
         y = _moving_average(y, smooth_window)
         x = _downsample(x, every_n)
         y = _downsample(y, every_n)
@@ -285,6 +308,7 @@ def plot_mean_curves_by_label(
     std_shade: bool,
     every_n: int,
     smooth_window: int,
+    label_map: Dict[str, str],
 ):
     try:
         import matplotlib.pyplot as plt
@@ -295,6 +319,7 @@ def plot_mean_curves_by_label(
     for file_name in csv_files:
         csv_path = Path(file_name)
         x, y, label = load_curve(csv_path, x_col, y_col, label_col=label_col)
+        label = label_map.get(label, label)
         grouped_curves.setdefault(label, []).append((x, y))
 
     if not grouped_curves:
@@ -338,6 +363,7 @@ if __name__ == "__main__":
         raise ValueError("--every-n must be >= 1.")
     if args.smooth_window < 1:
         raise ValueError("--smooth-window must be >= 1.")
+    label_map = _parse_label_map(args.label_map)
 
     if args.aggregate == "mean":
         plot_mean_curve(
@@ -362,6 +388,7 @@ if __name__ == "__main__":
             std_shade=args.std_shade,
             every_n=args.every_n,
             smooth_window=args.smooth_window,
+            label_map=label_map,
         )
     else:
         plot_curves(
@@ -373,4 +400,5 @@ if __name__ == "__main__":
             output=args.output,
             every_n=args.every_n,
             smooth_window=args.smooth_window,
+            label_map=label_map,
         )
