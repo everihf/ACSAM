@@ -77,6 +77,18 @@ def parse_args() -> argparse.Namespace:
         help="Trailing moving-average window size on Y values (>=1).",
     )
     parser.add_argument(
+        "--x-min",
+        default=None,
+        type=float,
+        help="Optional lower bound for X-axis values. Only points with x >= x-min are plotted.",
+    )
+    parser.add_argument(
+        "--x-max",
+        default=None,
+        type=float,
+        help="Optional upper bound for X-axis values. Only points with x <= x-max are plotted.",
+    )
+    parser.add_argument(
         "--output",
         default="example/metrics/compare_val_curves.png",
         help="Output image path.",
@@ -126,6 +138,45 @@ def _downsample(values: List[float], every_n: int) -> List[float]:
     return values[::every_n]
 
 
+def _slice_by_x(
+    x: List[float],
+    y: List[float],
+    x_min: float = None,
+    x_max: float = None,
+) -> Tuple[List[float], List[float]]:
+    selected_x: List[float] = []
+    selected_y: List[float] = []
+    for xv, yv in zip(x, y):
+        if x_min is not None and xv < x_min:
+            continue
+        if x_max is not None and xv > x_max:
+            continue
+        selected_x.append(xv)
+        selected_y.append(yv)
+    return selected_x, selected_y
+
+
+def _slice_by_x_with_std(
+    x: List[float],
+    mean_y: List[float],
+    std_y: List[float],
+    x_min: float = None,
+    x_max: float = None,
+) -> Tuple[List[float], List[float], List[float]]:
+    selected_x: List[float] = []
+    selected_mean: List[float] = []
+    selected_std: List[float] = []
+    for xv, mv, sv in zip(x, mean_y, std_y):
+        if x_min is not None and xv < x_min:
+            continue
+        if x_max is not None and xv > x_max:
+            continue
+        selected_x.append(xv)
+        selected_mean.append(mv)
+        selected_std.append(sv)
+    return selected_x, selected_mean, selected_std
+
+
 def _parse_label_map(entries: List[str]) -> Dict[str, str]:
     mapping: Dict[str, str] = {}
     for entry in entries:
@@ -150,6 +201,8 @@ def plot_curves(
     every_n: int,
     smooth_window: int,
     label_map: Dict[str, str],
+    x_min: float,
+    x_max: float,
 ):
     try:
         import matplotlib.pyplot as plt
@@ -165,6 +218,9 @@ def plot_curves(
         y = _moving_average(y, smooth_window)
         x = _downsample(x, every_n)
         y = _downsample(y, every_n)
+        x, y = _slice_by_x(x, y, x_min=x_min, x_max=x_max)
+        if not x:
+            continue
         plt.plot(x, y, marker="o", linewidth=1.5, markersize=3, label=label)
 
     plt.xlabel(x_col)
@@ -192,6 +248,8 @@ def plot_mean_curve(
     std_shade: bool,
     every_n: int,
     smooth_window: int,
+    x_min: float,
+    x_max: float,
 ):
     try:
         import matplotlib.pyplot as plt
@@ -240,6 +298,15 @@ def plot_mean_curve(
     plot_x = _downsample(reference_x, every_n)
     plot_mean_y = _downsample(mean_y, every_n)
     plot_std_y = _downsample(std_y, every_n)
+    plot_x, plot_mean_y, plot_std_y = _slice_by_x_with_std(
+        plot_x,
+        plot_mean_y,
+        plot_std_y,
+        x_min=x_min,
+        x_max=x_max,
+    )
+    if not plot_x:
+        raise ValueError("No points left after applying x-axis range filters.")
 
     plt.figure(figsize=(9, 5.5))
     plt.plot(plot_x, plot_mean_y, marker="o", linewidth=2.0, markersize=3, label=label)
@@ -309,6 +376,8 @@ def plot_mean_curves_by_label(
     every_n: int,
     smooth_window: int,
     label_map: Dict[str, str],
+    x_min: float,
+    x_max: float,
 ):
     try:
         import matplotlib.pyplot as plt
@@ -336,6 +405,15 @@ def plot_mean_curves_by_label(
         plot_x = _downsample(reference_x, every_n)
         plot_mean_y = _downsample(mean_y, every_n)
         plot_std_y = _downsample(std_y, every_n)
+        plot_x, plot_mean_y, plot_std_y = _slice_by_x_with_std(
+            plot_x,
+            plot_mean_y,
+            plot_std_y,
+            x_min=x_min,
+            x_max=x_max,
+        )
+        if not plot_x:
+            continue
 
         line = plt.plot(plot_x, plot_mean_y, marker="o", linewidth=2.0, markersize=3, label=group_label)[0]
         if std_shade:
@@ -363,6 +441,8 @@ if __name__ == "__main__":
         raise ValueError("--every-n must be >= 1.")
     if args.smooth_window < 1:
         raise ValueError("--smooth-window must be >= 1.")
+    if args.x_min is not None and args.x_max is not None and args.x_min > args.x_max:
+        raise ValueError("--x-min must be <= --x-max.")
     label_map = _parse_label_map(args.label_map)
 
     if args.aggregate == "mean":
@@ -376,6 +456,8 @@ if __name__ == "__main__":
             std_shade=args.std_shade,
             every_n=args.every_n,
             smooth_window=args.smooth_window,
+            x_min=args.x_min,
+            x_max=args.x_max,
         )
     elif args.aggregate == "mean_by_label":
         plot_mean_curves_by_label(
@@ -389,6 +471,8 @@ if __name__ == "__main__":
             every_n=args.every_n,
             smooth_window=args.smooth_window,
             label_map=label_map,
+            x_min=args.x_min,
+            x_max=args.x_max,
         )
     else:
         plot_curves(
@@ -401,4 +485,6 @@ if __name__ == "__main__":
             every_n=args.every_n,
             smooth_window=args.smooth_window,
             label_map=label_map,
+            x_min=args.x_min,
+            x_max=args.x_max,
         )
