@@ -769,11 +769,23 @@ if __name__ == "__main__":
         model.train()
         train_loader = dataset.train
         if curriculum_strategy in {"fixed", "adaptive", "self_paced"} and curriculum is not None:
-            train_loader = CurriculumBatchStream(
-                curriculum=curriculum,
-                batch_size=args.batch_size,
-                num_batches=steps_per_epoch,
-            )
+            use_stream_loader = True
+            if curriculum.curriculum_finished:
+                if curriculum_strategy in {"adaptive", "self_paced"} and curriculum_finished_epoch is None:
+                    curriculum_finished_epoch = epoch + 1
+                train_loader = curriculum.build_full_dataloader(
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                )
+                use_stream_loader = False
+
+            if use_stream_loader:
+                train_loader = CurriculumBatchStream(
+                    curriculum=curriculum,
+                    batch_size=args.batch_size,
+                    num_batches=steps_per_epoch,
+                )
             if curriculum_strategy == "fixed":
                 log.train(
                     len_dataset=len(train_loader),
