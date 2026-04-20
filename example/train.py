@@ -237,6 +237,79 @@ def build_teacher_model(args, student_model, num_classes, device, logger):
     return teacher_model
 
 
+def _extract_model_state_dict(checkpoint_obj):
+    if isinstance(checkpoint_obj, dict):
+        for nested_key in ("state_dict", "model_state_dict", "teacher_state_dict"):
+            nested_state = checkpoint_obj.get(nested_key)
+            if isinstance(nested_state, dict):
+                checkpoint_obj = nested_state
+                break
+    if not isinstance(checkpoint_obj, dict):
+        raise TypeError(f"Expected checkpoint to contain a state_dict-like dict, got {type(checkpoint_obj)!r}.")
+
+    normalized_state = {}
+    for key, value in checkpoint_obj.items():
+        normalized_key = key[7:] if isinstance(key, str) and key.startswith("module.") else key
+        normalized_state[normalized_key] = value
+    return normalized_state
+
+
+def _get_classifier_param_keys(model):
+    classifier_weight_key = None
+    classifier_bias_key = None
+    for module_name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            classifier_weight_key = f"{module_name}.weight" if module_name else "weight"
+            classifier_bias_key = f"{module_name}.bias" if module.bias is not None else None
+    return classifier_weight_key, classifier_bias_key
+
+
+def _maybe_adapt_teacher_checkpoint_to_subset(checkpoint_state, teacher_model, dataset, checkpoint_path, logger):
+    classifier_weight_key, classifier_bias_key = _get_classifier_param_keys(teacher_model)
+    if classifier_weight_key is None:
+        return checkpoint_state
+
+    source_weight = checkpoint_state.get(classifier_weight_key)
+    target_state = teacher_model.state_dict()
+    target_weight = target_state.get(classifier_weight_key)
+    if source_weight is None or target_weight is None:
+        return checkpoint_state
+    if tuple(source_weight.shape) == tuple(target_weight.shape):
+        return checkpoint_state
+
+    train_dataset = getattr(getattr(dataset, "train", None), "dataset", None)
+    subset_fine_indices = getattr(train_dataset, "selected_fine_indices", None)
+    if subset_fine_indices is None:
+        return checkpoint_state
+
+    subset_fine_indices = [int(idx) for idx in subset_fine_indices]
+    target_num_classes = int(target_weight.shape[0])
+    source_num_classes = int(source_weight.shape[0])
+    if len(subset_fine_indices) != target_num_classes:
+        return checkpoint_state
+    if not subset_fine_indices or max(subset_fine_indices) >= source_num_classes:
+        return checkpoint_state
+
+    adapted_state = dict(checkpoint_state)
+    row_indices = torch.as_tensor(subset_fine_indices, dtype=torch.long, device=source_weight.device)
+    adapted_state[classifier_weight_key] = source_weight.index_select(0, row_indices)
+
+    source_bias = checkpoint_state.get(classifier_bias_key) if classifier_bias_key is not None else None
+    if classifier_bias_key is not None and source_bias is not None:
+        bias_indices = torch.as_tensor(subset_fine_indices, dtype=torch.long, device=source_bias.device)
+        adapted_state[classifier_bias_key] = source_bias.index_select(0, bias_indices)
+
+    subset_class_names = list(getattr(train_dataset, "classes", []))
+    logger.info(
+        "Adapted teacher checkpoint %s classifier from %d classes to subset classes %s (fine indices=%s).",
+        checkpoint_path,
+        source_num_classes,
+        subset_class_names if subset_class_names else f"{target_num_classes} classes",
+        subset_fine_indices,
+    )
+    return adapted_state
+
+
 def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoint_dir, run_name, log_prefix):
     teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher_seed{args.seed}.log"
     teacher_logger = build_logger("train.teacher", teacher_log_path)
@@ -245,6 +318,14 @@ def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoi
     teacher_model = build_teacher_model(args, student_model, len(dataset.classes), device, logger)
     if args.teacher_checkpoint:
         teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
+        teacher_state = _extract_model_state_dict(teacher_state)
+        teacher_state = _maybe_adapt_teacher_checkpoint_to_subset(
+            checkpoint_state=teacher_state,
+            teacher_model=teacher_model,
+            dataset=dataset,
+            checkpoint_path=args.teacher_checkpoint,
+            logger=logger,
+        )
         teacher_model.load_state_dict(teacher_state)
         logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
     else:
