@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from model.wide_res_net import WideResNet
 from model.cifar100_cnn import Cifar100CNN
+from model.cifar_resnet import cifar_resnet18, cifar_resnet32
 from model.smooth_cross_entropy import smooth_crossentropy
 from data.cifar import Cifar
 from utility.log import Log
@@ -165,6 +166,10 @@ def build_model(args, model_name, num_classes):
             dropout_2_rate=args.cifar100_dropout2,
             batch_norm=args.cifar100_batch_norm,
         )
+    if model_name == "resnet18":
+        return cifar_resnet18(num_classes=num_classes)
+    if model_name == "resnet32":
+        return cifar_resnet32(num_classes=num_classes)
     raise ValueError(f"Unsupported model: {model_name}")
 
 
@@ -371,7 +376,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default=100, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
     #model
-    parser.add_argument("--model", default="cifar100_cnn", type=str, choices=["wrn", "cifar100_cnn"], help="Model architecture to train.")
+    parser.add_argument("--model", default="cifar100_cnn", type=str, choices=["wrn", "cifar100_cnn", "resnet18", "resnet32"], help="Model architecture to train.")
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")
     parser.add_argument("--dropout", default=0.0, type=float, help="Dropout rate.")
     parser.add_argument("--width_factor", default=8, type=int, help="How many times wider compared to normal ResNet.")
@@ -379,7 +384,7 @@ if __name__ == "__main__":
     parser.add_argument("--cifar100_dropout1", default=0.25, type=float, help="Dropout after each convolutional stage in cifar100_cnn.")
     parser.add_argument("--cifar100_dropout2", default=0.5, type=float, help="Dropout before classifier head in cifar100_cnn.")
     parser.add_argument("--cifar100_batch_norm", default=False, type=parse_bool, help="Enable batch norm layers in cifar100_cnn.")
-    parser.add_argument("--teacher_model", default=None, type=str, choices=["wrn", "cifar100_cnn"], help="Optional teacher architecture. If omitted, teacher reuses student's architecture.")
+    parser.add_argument("--teacher_model", default=None, type=str, choices=["wrn", "cifar100_cnn", "resnet18", "resnet32"], help="Optional teacher architecture. If omitted, teacher reuses student's architecture.")
     parser.add_argument("--teacher_depth", default=None, type=int, help="Optional teacher WRN depth. Effective only when teacher model is WRN.")
     parser.add_argument("--teacher_dropout", default=None, type=float, help="Optional teacher WRN dropout. Effective only when teacher model is WRN.")
     parser.add_argument("--teacher_width_factor", default=None, type=int, help="Optional teacher WRN width factor. Effective only when teacher model is WRN.")
