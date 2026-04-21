@@ -316,10 +316,6 @@ def _maybe_adapt_teacher_checkpoint_to_subset(checkpoint_state, teacher_model, d
 
 
 def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoint_dir, run_name, log_prefix):
-    teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher_seed{args.seed}.log"
-    teacher_logger = build_logger("train.teacher", teacher_log_path)
-    logger.info("Teacher pretraining log file: %s", teacher_log_path)
-
     teacher_model = build_teacher_model(args, student_model, len(dataset.classes), device, logger)
     if args.teacher_checkpoint:
         teacher_state = torch.load(args.teacher_checkpoint, map_location=device)
@@ -334,6 +330,9 @@ def prepare_teacher_model(args, student_model, dataset, device, logger, checkpoi
         teacher_model.load_state_dict(teacher_state)
         logger.info("Loaded teacher checkpoint from %s", args.teacher_checkpoint)
     else:
+        teacher_log_path = Path(__file__).resolve().parent / f"{log_prefix}_teacher_seed{args.seed}.log"
+        teacher_logger = build_logger("train.teacher", teacher_log_path)
+        logger.info("Teacher pretraining log file: %s", teacher_log_path)
         teacher_best_checkpoint_path = checkpoint_dir / f"{run_name}_teacher_model.pt"
         teacher_model = pretrain_teacher_model(
             teacher_model=teacher_model,
