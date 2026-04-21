@@ -488,16 +488,17 @@ if __name__ == "__main__":
     train_start_time = datetime.now(ZoneInfo("Asia/Shanghai"))
     train_start_perf = time.perf_counter()
     log_prefix = train_start_time.strftime("%m-%d_%H-%M-%S")
+    optimizer_log_tag = "G" if args.optimizer == "sgd" else "A"
     if curriculum_strategy == "none":
-        student_log_filename = f"{log_prefix}_base_seed{args.seed}.log"
+        student_log_filename = f"{log_prefix}_base({optimizer_log_tag})_seed{args.seed}.log"
     elif curriculum_strategy == "adaptive":
-        student_log_filename = f"{log_prefix}_student_seed{args.seed}.log"
+        student_log_filename = f"{log_prefix}_student({optimizer_log_tag})_seed{args.seed}.log"
     elif curriculum_strategy == "self_paced":
-        student_log_filename = f"{log_prefix}_self-paced_seed{args.seed}.log"
+        student_log_filename = f"{log_prefix}_self-paced({optimizer_log_tag})_seed{args.seed}.log"
     elif curriculum_strategy == "fixed":
-        student_log_filename = f"{log_prefix}_fixed_seed{args.seed}.log"
+        student_log_filename = f"{log_prefix}_fixed({optimizer_log_tag})_seed{args.seed}.log"
     else:
-        student_log_filename = f"{log_prefix}_student_seed{args.seed}.log"
+        student_log_filename = f"{log_prefix}_student({optimizer_log_tag})_seed{args.seed}.log"
     student_log_path = Path(__file__).resolve().parent / student_log_filename
     logger = build_logger("train.student", student_log_path)
     logger.info("Student training log file: %s", student_log_path)
