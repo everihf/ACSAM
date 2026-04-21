@@ -174,8 +174,6 @@ def build_model(args, model_name, num_classes):
 
 
 def resolve_curriculum_strategy(args):
-    if args.curriculum_strategy is None:
-        return "adaptive" if args.use_adaptive_curriculum else "none"
     return args.curriculum_strategy
 
 
@@ -397,8 +395,7 @@ if __name__ == "__main__":
     parser.add_argument("--rho", default=2.0, type=float, help="Rho parameter for SAM.")
     parser.add_argument("--weight_decay", default=0.0005, type=float, help="L2 weight decay.")
     # curriculum strategy
-    parser.add_argument("--curriculum_strategy", default=None, type=str, choices=["none", "adaptive", "fixed", "self_paced"], help="Curriculum strategy. If omitted, falls back to --use_adaptive_curriculum for backward compatibility.")
-    parser.add_argument("--use_adaptive_curriculum", default=True, type=parse_bool, help="Legacy flag. If --curriculum_strategy is omitted, True->adaptive, False->none.")
+    parser.add_argument("--curriculum_strategy", default="none", type=str, choices=["none", "adaptive", "fixed", "self_paced"], help="Curriculum strategy.")
     parser.add_argument("--teacher_checkpoint", default="", type=str, help="Optional teacher checkpoint path. If empty, pretrain a teacher model first.")
 
     # adaptive curriculum params
@@ -514,14 +511,6 @@ if __name__ == "__main__":
             args.dataset,
             ", ".join(f"{k}={v}" for k, v in applied_dataset_defaults.items()),
         )
-    if args.curriculum_strategy is not None:
-        legacy_expected = "adaptive" if args.use_adaptive_curriculum else "none"
-        if legacy_expected != curriculum_strategy:
-            logger.info(
-                "Ignoring legacy --use_adaptive_curriculum=%s because --curriculum_strategy=%s was set explicitly.",
-                args.use_adaptive_curriculum,
-                curriculum_strategy,
-            )
     logger.info(
         "Effective args: model=%s, optimizer=%s(adaptive=%s), curriculum_strategy=%s, teacher_optimizer=%s",
         args.model,
