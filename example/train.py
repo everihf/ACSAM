@@ -403,6 +403,7 @@ if __name__ == "__main__":
     parser.add_argument("--inv", default=50, type=int, help="Difficulty update interval in batches.")
     parser.add_argument("--self_paced_inv", default=50, type=int, help="Difficulty update interval (in batches) used only by self-paced curriculum.")
     parser.add_argument("--alpha", default=-0.01, type=float, help="Difficulty EMA factor.")
+    parser.add_argument("--difficulty_warmup_batches", default=150, type=int, help="Number of initial training batches to skip before adaptive curriculum starts remeasuring sample difficulty.")
     parser.add_argument(
         "--adaptive_teacher_source",
         default="inception_svm",
@@ -524,6 +525,10 @@ if __name__ == "__main__":
             max(0, args.distill_extra_epochs_after_curriculum),
         )
         logger.info(
+            "Adaptive difficulty remeasurement warmup batches: %d",
+            max(0, args.difficulty_warmup_batches),
+        )
+        logger.info(
             "Adaptive teacher source: %s",
             args.adaptive_teacher_source,
         )
@@ -634,6 +639,7 @@ if __name__ == "__main__":
             pace_r=args.pace_r,
             inv=args.inv,
             alpha=args.alpha,
+            difficulty_warmup_batches=args.difficulty_warmup_batches,
             lambda1=args.lambda1,
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
@@ -664,6 +670,7 @@ if __name__ == "__main__":
             pace_r=args.pace_r,
             inv=args.self_paced_inv,
             alpha=1.0,
+            difficulty_warmup_batches=0,
             lambda1=0.0,
             lambda1_decay=None,
             bottom_lambda1=0.0,

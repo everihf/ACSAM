@@ -41,6 +41,7 @@ class AdaptiveCurriculum:
         pace_r,
         inv,
         alpha,
+        difficulty_warmup_batches,
         lambda1,
         lambda1_decay,
         bottom_lambda1,
@@ -61,6 +62,7 @@ class AdaptiveCurriculum:
         self.inv = inv
 
         self.alpha = alpha
+        self.difficulty_warmup_batches = max(0, int(difficulty_warmup_batches))
         self.curriculum_type = str(curriculum_type).lower()
         if self.curriculum_type not in {"curriculum", "anti", "random", "self_paced"}:
             raise ValueError(f"Unsupported curriculum_type: {self.curriculum_type}")
@@ -300,7 +302,7 @@ class AdaptiveCurriculum:
                 self.lambda1 = max(self.bottom_lambda1, self.lambda1 - self.lambda1_decay)
             return
 
-        warmup_batches = 0 if self.student_difficulty_only else 150
+        warmup_batches = 0 if self.student_difficulty_only else self.difficulty_warmup_batches
         should_update_difficulty = self.global_batch % self.inv == 0 and (self.global_batch + 1) > warmup_batches
         if should_update_difficulty:
             self._remeasure_difficulty(model, batch_size, num_workers, pin_memory)
