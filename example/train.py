@@ -370,6 +370,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--batch_size", default=100, type=int, help="Batch size used in the training and validation loop.")#批量大小（batch size）
     parser.add_argument("--num_workers", default=2, type=int, help="Number of CPU threads for dataloaders.")
+    parser.add_argument("--use_data_augmentation", default=True, type=parse_bool, help="Whether to use CIFAR training data augmentation (random crop, horizontal flip, cutout).")
     #model
     parser.add_argument("--model", default="cifar100_cnn", type=str, choices=["wrn", "cifar100_cnn", "resnet18", "resnet32"], help="Model architecture to train.")
     parser.add_argument("--depth", default=16, type=int, help="Number of layers.")
@@ -583,7 +584,12 @@ if __name__ == "__main__":
     checkpoint_dir = Path(__file__).resolve().parent / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    dataset = Cifar(args.batch_size, args.num_workers, dataset=args.dataset)
+    dataset = Cifar(
+        args.batch_size,
+        args.num_workers,
+        dataset=args.dataset,
+        use_data_augmentation=args.use_data_augmentation,
+    )
     train_log_each = 10 if curriculum_strategy == "fixed" else 50
     log = Log(log_each=train_log_each, logger=logger)
     model = build_model(args, args.model, len(dataset.classes)).to(device)

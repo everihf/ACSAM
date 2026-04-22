@@ -64,8 +64,9 @@ class LabelMappedSubset(Dataset):
 
 
 class Cifar:
-    def __init__(self, batch_size, num_workers, dataset="cifar10"):
+    def __init__(self, batch_size, num_workers, dataset="cifar10", use_data_augmentation=True):
         self.dataset = dataset.lower()
+        self.use_data_augmentation = bool(use_data_augmentation)
         supported_datasets = {"cifar10", "cifar100"} | set(CIFAR100_SUPERCLASS_SUBSETS.keys())
         if self.dataset not in supported_datasets:
             raise ValueError(
@@ -85,13 +86,19 @@ class Cifar:
         else:
             mean, std = self._get_statistics(base_dataset_class)
 
-        train_transform = transforms.Compose([
-            torchvision.transforms.RandomCrop(size=(32, 32), padding=4),
-            torchvision.transforms.RandomHorizontalFlip(),
+        train_transform_steps = []
+        if self.use_data_augmentation:
+            train_transform_steps.extend([
+                torchvision.transforms.RandomCrop(size=(32, 32), padding=4),
+                torchvision.transforms.RandomHorizontalFlip(),
+            ])
+        train_transform_steps.extend([
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
-            Cutout(),
         ])
+        if self.use_data_augmentation:
+            train_transform_steps.append(Cutout())
+        train_transform = transforms.Compose(train_transform_steps)
 
         test_transform = transforms.Compose([
             transforms.ToTensor(),
