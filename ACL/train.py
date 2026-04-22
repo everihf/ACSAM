@@ -495,12 +495,10 @@ def main() -> None:
         model.train()
 
         if curriculum is None:
-            distillation_enabled = False
             train_loader = dataset.train
             pool_size = ""
             curriculum_finished = ""
         elif curriculum.curriculum_finished:
-            distillation_enabled = False
             train_loader = curriculum.build_full_dataloader(
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
@@ -509,7 +507,6 @@ def main() -> None:
             pool_size = curriculum.current_pool_size()
             curriculum_finished = curriculum.curriculum_finished
         elif args.adaptive_loader_mode == "epoch_subset":
-            distillation_enabled = True
             train_loader = curriculum.build_dataloader(
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
@@ -518,7 +515,6 @@ def main() -> None:
             pool_size = curriculum.current_pool_size()
             curriculum_finished = curriculum.curriculum_finished
         else:
-            distillation_enabled = True
             train_loader = CurriculumBatchStream(
                 curriculum=curriculum,
                 batch_size=args.batch_size,
@@ -541,6 +537,8 @@ def main() -> None:
                 targets = targets.to(device)
                 indices = indices.to(device)
 
+            batch_distillation_enabled = curriculum is not None and not curriculum.curriculum_finished
+
             if args.optimizer == "sam":
                 enable_running_stats(model)
                 predictions = model(inputs)
@@ -551,7 +549,7 @@ def main() -> None:
                 )
                 first_loss = (
                     curriculum.curriculum_loss(per_sample_loss, predictions, indices)
-                    if distillation_enabled
+                    if batch_distillation_enabled
                     else per_sample_loss.mean()
                 )
                 first_loss.backward()
@@ -566,7 +564,7 @@ def main() -> None:
                 )
                 second_loss = (
                     curriculum.curriculum_loss(second_per_sample_loss, second_predictions, indices)
-                    if distillation_enabled
+                    if batch_distillation_enabled
                     else second_per_sample_loss.mean()
                 )
                 second_loss.backward()
@@ -581,7 +579,7 @@ def main() -> None:
                 )
                 loss = (
                     curriculum.curriculum_loss(per_sample_loss, predictions, indices)
-                    if distillation_enabled
+                    if batch_distillation_enabled
                     else per_sample_loss.mean()
                 )
                 optimizer.zero_grad()

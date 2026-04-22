@@ -40,6 +40,9 @@ The implementation follows the main paper loop:
 - The pacing rule includes the `batch_size / 100` scaling used in the common
   public ACL code path. This is exposed as `pacing_reference_batch_size` in the
   config so it can be changed explicitly.
+- Once the curriculum expands to the full dataset, ACL freezes the curriculum
+  state and continues with plain full-dataset training, so it no longer
+  remeasures difficulty or resorts samples.
 
 ## Quick Start
 

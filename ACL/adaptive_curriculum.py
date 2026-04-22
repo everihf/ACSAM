@@ -151,6 +151,7 @@ class AdaptiveCurriculumLearning:
         self.pin_memory = False
 
         self.difficulty = torch.zeros(self.data_size, device=self.device)
+        self.full_indices = torch.arange(self.data_size, device=self.device)
         self._initialized = False
 
     def initialize(
@@ -204,12 +205,15 @@ class AdaptiveCurriculumLearning:
     def sample_pool_indices(self) -> torch.Tensor:
         self._require_initialized()
 
-        ordered_indices = torch.argsort(self.difficulty)
-        pool_size = self.current_pool_size()
-        self.curriculum_finished = pool_size >= self.data_size
+        if self.curriculum_finished:
+            return self.full_indices
 
+        pool_size = self.current_pool_size()
         if pool_size >= self.data_size:
-            return ordered_indices
+            self.curriculum_finished = True
+            return self.full_indices
+
+        ordered_indices = torch.argsort(self.difficulty)
         if not self.config.keep_class_balance or self.class_labels is None:
             return ordered_indices[:pool_size]
         return self._balanced_prefix(ordered_indices, pool_size)
@@ -314,8 +318,16 @@ class AdaptiveCurriculumLearning:
     def update_after_batch(self, student_model: torch.nn.Module) -> None:
         self._require_initialized()
 
+        if self.curriculum_finished:
+            return
+
         self.global_batch += 1
-        self.curriculum_finished = self.current_pool_size() >= self.data_size
+        if self.current_pool_size() >= self.data_size:
+            # Once the curriculum has expanded to the whole dataset, freeze the
+            # curriculum state and let training fall back to plain full-dataset
+            # optimization without more difficulty measurements or reordering.
+            self.curriculum_finished = True
+            return
 
         if self.global_batch % self.config.inv == 0:
             if self.global_batch > self.config.difficulty_warmup_batches:
