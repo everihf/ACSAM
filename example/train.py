@@ -420,6 +420,15 @@ if __name__ == "__main__":
         choices=["curriculum", "anti", "random", "self_paced"],
         help="Ordering style for adaptive curriculum candidate selection.",
     )
+    parser.add_argument(
+        "--adaptive_loader_mode",
+        default="stream",
+        type=str,
+        choices=["stream", "epoch_subset"],
+        help="Adaptive curriculum batch construction mode. "
+             "'stream' keeps the current behavior and resamples one batch at a time from the current candidate pool; "
+             "'epoch_subset' matches the old repository behavior by building one epoch-sized curriculum subset dataloader per epoch.",
+    )
     parser.add_argument("--lambda1", default=0.01, type=float, help="Weight of teacher KL distillation term.")
     parser.add_argument("--lambda1_decay", default=None, type=float, help="Optional decay step for lambda1 at each inv interval.")
     parser.add_argument("--bottom_lambda1", default=0.1, type=float, help="Lower bound of lambda1 when decay is enabled.")
@@ -536,6 +545,10 @@ if __name__ == "__main__":
         logger.info(
             "Adaptive class-balanced ordering (fixed_balance_order): %s",
             args.fixed_balance_order,
+        )
+        logger.info(
+            "Adaptive loader mode: %s",
+            args.adaptive_loader_mode,
         )
         if args.adaptive_teacher_source == "inception_svm":
             logger.info(
@@ -802,6 +815,8 @@ if __name__ == "__main__":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
         elif args.teacher_optimizer == "sam":
             default_method_name = f"{default_method_name}-{args.teacher_optimizer}"
+        if args.adaptive_loader_mode != "stream":
+            default_method_name = f"{default_method_name}-{args.adaptive_loader_mode}"
     elif curriculum_strategy == "self_paced":
         default_method_name = f"{default_method_name}+self_paced_curriculum"
     elif curriculum_strategy == "fixed":
@@ -829,7 +844,9 @@ if __name__ == "__main__":
         model.train()
         train_loader = dataset.train
         if curriculum_strategy in {"fixed", "adaptive", "self_paced"} and curriculum is not None:
-            use_stream_loader = True
+            use_stream_loader = curriculum_strategy in {"fixed", "self_paced"}
+            if curriculum_strategy == "adaptive":
+                use_stream_loader = args.adaptive_loader_mode == "stream"
             if curriculum.curriculum_finished:
                 if curriculum_strategy in {"adaptive", "self_paced"} and curriculum_finished_epoch is None:
                     curriculum_finished_epoch = epoch + 1
@@ -846,6 +863,18 @@ if __name__ == "__main__":
                     batch_size=args.batch_size,
                     num_batches=steps_per_epoch,
                 )
+            else:
+                train_loader = curriculum.build_dataloader(
+                    batch_size=args.batch_size,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
+                )
+                if (
+                    curriculum_strategy in {"adaptive", "self_paced"}
+                    and curriculum.curriculum_finished
+                    and curriculum_finished_epoch is None
+                ):
+                    curriculum_finished_epoch = epoch + 1
             if curriculum_strategy == "fixed":
                 log.train(
                     len_dataset=len(train_loader),
