@@ -67,6 +67,18 @@ python ACL/train.py \
   --teacher_checkpoint example/checkpoints/04-22_18-42-45_teacher_model_cifar10-resnet-epoch200.pt
 ```
 
+Disable the curriculum and train a plain baseline in the same entrypoint:
+
+```bash
+python ACL/train.py \
+  --seed 1 \
+  --dataset cifar10 \
+  --epochs 97 \
+  --model resnet18 \
+  --optimizer sgd \
+  --curriculum_strategy none
+```
+
 Outputs from `ACL/train.py` are written under:
 
 - `ACL/logs`

@@ -337,7 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--momentum", default=0.9, type=float)
     parser.add_argument("--rho", default=2.0, type=float)
     parser.add_argument("--weight_decay", default=0.0005, type=float)
-    parser.add_argument("--curriculum_strategy", default="adaptive", type=str, choices=["adaptive"])
+    parser.add_argument("--curriculum_strategy", default="adaptive", type=str, choices=["none", "adaptive"])
     parser.add_argument("--teacher_checkpoint", default="", type=str)
     parser.add_argument("--pace_p", default=0.04, type=float)
     parser.add_argument("--pace_q", default=1.9, type=float)
@@ -365,9 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
-    if args.curriculum_strategy != "adaptive":
-        raise ValueError("ACL/train.py currently supports only --curriculum_strategy adaptive.")
-    if args.adaptive_teacher_source != "teacher_model":
+    if args.curriculum_strategy == "adaptive" and args.adaptive_teacher_source != "teacher_model":
         raise NotImplementedError(
             "ACL/train.py currently supports only --adaptive_teacher_source teacher_model."
         )
@@ -382,7 +380,9 @@ def main() -> None:
 
     start_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
     log_prefix = start_dt.strftime("%m-%d_%H-%M-%S")
-    run_name = args.run_name or f"{log_prefix}_acl_{args.dataset}-{args.model}_seed{args.seed}"
+    run_name = args.run_name or (
+        f"{log_prefix}_acl-{args.curriculum_strategy}_{args.dataset}-{args.model}_seed{args.seed}"
+    )
 
     log_dir = CURRENT_DIR / args.log_dir
     metrics_dir = CURRENT_DIR / args.metrics_dir
@@ -394,6 +394,7 @@ def main() -> None:
     logger = build_logger("acl.train", log_dir / f"{run_name}.log")
     logger.info("Run name: %s", run_name)
     logger.info("Device: %s", device)
+    logger.info("Curriculum strategy: %s", args.curriculum_strategy)
 
     dataset = Cifar(
         batch_size=args.batch_size,
@@ -410,41 +411,48 @@ def main() -> None:
     )
 
     model = build_model(args, args.model, len(dataset.classes)).to(device)
-    teacher_model = prepare_teacher_model(
-        args=args,
-        student_model=model,
-        dataset=dataset,
-        device=device,
-        logger=logger,
-        checkpoint_dir=checkpoint_dir,
-        run_name=run_name,
-    )
+    curriculum = None
+    if args.curriculum_strategy == "adaptive":
+        teacher_model = prepare_teacher_model(
+            args=args,
+            student_model=model,
+            dataset=dataset,
+            device=device,
+            logger=logger,
+            checkpoint_dir=checkpoint_dir,
+            run_name=run_name,
+        )
 
-    curriculum_config = AdaptiveCurriculumConfig(
-        pace_p=args.pace_p,
-        pace_q=args.pace_q,
-        pace_r=args.pace_r,
-        inv=args.inv,
-        alpha=args.alpha,
-        lambda_kl=args.lambda1,
-        lambda_kl_decay=args.lambda1_decay,
-        lambda_kl_min=args.bottom_lambda1,
-        difficulty_warmup_batches=args.difficulty_warmup_batches,
-        keep_class_balance=args.fixed_balance_order,
-        score_mode="cross_entropy",
-    )
-    curriculum = AdaptiveCurriculumLearning(
-        train_dataset=dataset.train_dataset,
-        num_classes=len(dataset.classes),
-        device=device,
-        config=curriculum_config,
-        teacher_model=teacher_model,
-    )
-    curriculum.initialize(
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=pin_memory,
-    )
+        curriculum_config = AdaptiveCurriculumConfig(
+            pace_p=args.pace_p,
+            pace_q=args.pace_q,
+            pace_r=args.pace_r,
+            inv=args.inv,
+            alpha=args.alpha,
+            lambda_kl=args.lambda1,
+            lambda_kl_decay=args.lambda1_decay,
+            lambda_kl_min=args.bottom_lambda1,
+            difficulty_warmup_batches=args.difficulty_warmup_batches,
+            keep_class_balance=args.fixed_balance_order,
+            score_mode="cross_entropy",
+        )
+        curriculum = AdaptiveCurriculumLearning(
+            train_dataset=dataset.train_dataset,
+            num_classes=len(dataset.classes),
+            device=device,
+            config=curriculum_config,
+            teacher_model=teacher_model,
+        )
+        curriculum.initialize(
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
+        )
+    else:
+        if args.teacher_checkpoint or args.teacher_model is not None:
+            logger.info(
+                "Ignoring teacher-related options because curriculum_strategy=none."
+            )
 
     if args.optimizer == "sam":
         optimizer = SAM(
@@ -486,33 +494,52 @@ def main() -> None:
         epoch_start_perf = time.perf_counter()
         model.train()
 
-        distillation_enabled = not curriculum.curriculum_finished
-        if curriculum.curriculum_finished:
+        if curriculum is None:
+            distillation_enabled = False
+            train_loader = dataset.train
+            pool_size = ""
+            curriculum_finished = ""
+        elif curriculum.curriculum_finished:
+            distillation_enabled = False
             train_loader = curriculum.build_full_dataloader(
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
                 pin_memory=pin_memory,
             )
+            pool_size = curriculum.current_pool_size()
+            curriculum_finished = curriculum.curriculum_finished
         elif args.adaptive_loader_mode == "epoch_subset":
+            distillation_enabled = True
             train_loader = curriculum.build_dataloader(
                 batch_size=args.batch_size,
                 num_workers=args.num_workers,
                 pin_memory=pin_memory,
             )
+            pool_size = curriculum.current_pool_size()
+            curriculum_finished = curriculum.curriculum_finished
         else:
+            distillation_enabled = True
             train_loader = CurriculumBatchStream(
                 curriculum=curriculum,
                 batch_size=args.batch_size,
                 num_batches=steps_per_epoch,
             )
+            pool_size = curriculum.current_pool_size()
+            curriculum_finished = curriculum.curriculum_finished
         log.train(len_dataset=len(train_loader))
 
         epoch_batches = 0
         for batch in train_loader:
-            inputs, targets, indices = batch
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-            indices = indices.to(device)
+            if curriculum is None:
+                inputs, targets = batch
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+                indices = None
+            else:
+                inputs, targets, indices = batch
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+                indices = indices.to(device)
 
             if args.optimizer == "sam":
                 enable_running_stats(model)
@@ -561,7 +588,8 @@ def main() -> None:
                 loss.backward()
                 optimizer.step()
 
-            curriculum.update_after_batch(model)
+            if curriculum is not None:
+                curriculum.update_after_batch(model)
 
             cumulative_batches += 1
             epoch_batches += 1
@@ -589,7 +617,12 @@ def main() -> None:
 
         epoch_val_accuracy = eval_correct_sum / eval_steps if eval_steps > 0 else float("nan")
         elapsed_seconds = time.perf_counter() - train_start_perf
-        pool_size = curriculum.current_pool_size()
+        if curriculum is not None:
+            pool_size = curriculum.current_pool_size()
+            curriculum_finished = curriculum.curriculum_finished
+        else:
+            pool_size = ""
+            curriculum_finished = ""
         val_curve.append(epoch_val_accuracy)
 
         with metrics_path.open("a", newline="", encoding="utf-8") as csv_file:
@@ -604,7 +637,7 @@ def main() -> None:
                     "elapsed_seconds": elapsed_seconds,
                     "val_accuracy": epoch_val_accuracy,
                     "pool_size": pool_size,
-                    "curriculum_finished": curriculum.curriculum_finished,
+                    "curriculum_finished": curriculum_finished,
                 }
             )
 
@@ -615,20 +648,31 @@ def main() -> None:
                 torch.save(model.state_dict(), best_checkpoint_path)
                 logger.info("Saved new best student checkpoint to %s", best_checkpoint_path)
 
-        logger.info(
-            "Epoch %d/%d t: %.2fs  (T: %.2fs), epoch_batches=%d, pool_size=%d/%d, "
-            "curriculum_finished=%s, lambda1=%.4f, val_accuracy=%.2f%%",
-            epoch + 1,
-            args.epochs,
-            time.perf_counter() - epoch_start_perf,
-            elapsed_seconds,
-            epoch_batches,
-            pool_size,
-            len(dataset.train_dataset),
-            curriculum.curriculum_finished,
-            curriculum.config.lambda_kl,
-            epoch_val_accuracy * 100,
-        )
+        if curriculum is not None:
+            logger.info(
+                "Epoch %d/%d t: %.2fs  (T: %.2fs), epoch_batches=%d, pool_size=%d/%d, "
+                "curriculum_finished=%s, lambda1=%.4f, val_accuracy=%.2f%%",
+                epoch + 1,
+                args.epochs,
+                time.perf_counter() - epoch_start_perf,
+                elapsed_seconds,
+                epoch_batches,
+                pool_size,
+                len(dataset.train_dataset),
+                curriculum.curriculum_finished,
+                curriculum.config.lambda_kl,
+                epoch_val_accuracy * 100,
+            )
+        else:
+            logger.info(
+                "Epoch %d/%d t: %.2fs  (T: %.2fs), epoch_batches=%d, val_accuracy=%.2f%%",
+                epoch + 1,
+                args.epochs,
+                time.perf_counter() - epoch_start_perf,
+                elapsed_seconds,
+                epoch_batches,
+                epoch_val_accuracy * 100,
+            )
 
     log.flush()
     if best_epoch > 0:
