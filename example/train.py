@@ -178,9 +178,7 @@ def resolve_curriculum_strategy(args):
 
 
 def resolve_adaptive_curriculum_type(args):
-    if args.adaptive_curriculum_type is not None:
-        return str(args.adaptive_curriculum_type).lower()
-    return "curriculum" if args.use_difficulty_sorting else "random"
+    return str(args.adaptive_curriculum_type).lower()
 
 
 class CurriculumBatchStream:
@@ -414,13 +412,6 @@ if __name__ == "__main__":
              "'inception_svm' uses fixed-curriculum Inception+SVM pseudo teacher by default.",
     )
     parser.add_argument(
-        "--use_difficulty_sorting",
-        default=True,
-        type=parse_bool,
-        help="Legacy adaptive ordering flag. True->curriculum(easy->hard), False->random. "
-             "Prefer using --adaptive_curriculum_type.",
-    )
-    parser.add_argument(
         "--adaptive_curriculum_type",
         default="curriculum",
         type=str,
@@ -528,26 +519,9 @@ if __name__ == "__main__":
             "Adaptive curriculum ordering type: %s",
             adaptive_curriculum_type,
         )
-        if args.adaptive_curriculum_type is not None and "use_difficulty_sorting" in cli_provided_dests:
-            legacy_expected_type = "curriculum" if args.use_difficulty_sorting else "random"
-            if legacy_expected_type != adaptive_curriculum_type:
-                logger.info(
-                    "Ignoring legacy --use_difficulty_sorting=%s because --adaptive_curriculum_type=%s was set explicitly.",
-                    args.use_difficulty_sorting,
-                    adaptive_curriculum_type,
-                )
-        elif args.adaptive_curriculum_type is None:
-            logger.info(
-                "Adaptive ordering inferred from legacy --use_difficulty_sorting=%s.",
-                args.use_difficulty_sorting,
-            )
         logger.info(
             "Distillation extra epochs after curriculum finished: %d",
             max(0, args.distill_extra_epochs_after_curriculum),
-        )
-        logger.info(
-            "Curriculum sample selection uses difficulty sorting: %s",
-            args.use_difficulty_sorting,
         )
         logger.info(
             "Adaptive teacher source: %s",
@@ -664,7 +638,6 @@ if __name__ == "__main__":
             lambda1_decay=args.lambda1_decay,
             bottom_lambda1=args.bottom_lambda1,
             curriculum_type=adaptive_curriculum_type,
-            use_difficulty_sorting=args.use_difficulty_sorting,
             use_balance_order=adaptive_balance_enabled,
         )
         curriculum.initialize(
@@ -695,7 +668,6 @@ if __name__ == "__main__":
             lambda1_decay=None,
             bottom_lambda1=0.0,
             curriculum_type="self_paced",
-            use_difficulty_sorting=True,
             use_balance_order=adaptive_balance_enabled,
             student_difficulty_only=True,
         )

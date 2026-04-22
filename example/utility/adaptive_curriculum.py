@@ -45,7 +45,6 @@ class AdaptiveCurriculum:
         lambda1_decay,
         bottom_lambda1,
         curriculum_type="curriculum",
-        use_difficulty_sorting=True,
         use_balance_order=True,
         teacher_logits_by_index=None,
         student_difficulty_only=False,
@@ -62,12 +61,7 @@ class AdaptiveCurriculum:
         self.inv = inv
 
         self.alpha = alpha
-        # Backward compatibility for older callers that only pass use_difficulty_sorting.
-        self.use_difficulty_sorting = bool(use_difficulty_sorting)
-        if curriculum_type is None:
-            self.curriculum_type = "curriculum" if self.use_difficulty_sorting else "random"
-        else:
-            self.curriculum_type = str(curriculum_type).lower()
+        self.curriculum_type = str(curriculum_type).lower()
         if self.curriculum_type not in {"curriculum", "anti", "random", "self_paced"}:
             raise ValueError(f"Unsupported curriculum_type: {self.curriculum_type}")
         self.student_difficulty_only = bool(student_difficulty_only or self.curriculum_type == "self_paced")
