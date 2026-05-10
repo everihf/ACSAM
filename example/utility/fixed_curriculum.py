@@ -31,6 +31,7 @@ class FixedCurriculumConfig:
     increase_amount: float
     starting_percent: float
     curriculum_type: str
+    use_balance_order: bool = False
 
 
 class FixedCurriculum:
@@ -51,6 +52,7 @@ class FixedCurriculum:
         self.increase_amount = float(config.increase_amount)
         self.starting_percent = float(config.starting_percent)
         self.curriculum_type = str(config.curriculum_type).lower()
+        self.use_balance_order = bool(config.use_balance_order)
 
         if self.curriculum_type not in {"curriculum", "anti", "random"}:
             raise ValueError(f"Unsupported curriculum_type: {self.curriculum_type}")
@@ -70,10 +72,19 @@ class FixedCurriculum:
         elif self.curriculum_type == "random":
             ordered = ordered[torch.randperm(self.data_size)]
         self.ordered_indices = ordered
+        self.class_labels = None
+        self.num_classes = 0
+        labels = getattr(train_dataset, "targets", None)
+        if labels is not None:
+            labels_tensor = torch.as_tensor(list(labels), dtype=torch.long)
+            if int(labels_tensor.numel()) == self.data_size:
+                self.class_labels = labels_tensor
+                self.num_classes = int(labels_tensor.max().item()) + 1 if labels_tensor.numel() > 0 else 0
 
         self.global_batch = 0
         self.curriculum_finished = False
         self._full_loader = None
+        self.last_candidate_histogram = None
 
     def initialize(self, *_, **__):
         # Kept for API compatibility with AdaptiveCurriculum.
@@ -98,6 +109,7 @@ class FixedCurriculum:
             return self.build_full_dataloader(batch_size, num_workers, pin_memory)
 
         selected_indices = self.ordered_indices[:epoch_size].cpu().tolist()
+        self.snapshot_candidate_histogram(torch.as_tensor(selected_indices, dtype=torch.long))
         subset = Subset(self.indexed_dataset, selected_indices)
         return DataLoader(
             subset,
@@ -108,6 +120,7 @@ class FixedCurriculum:
         )
 
     def build_full_dataloader(self, batch_size, num_workers, pin_memory):
+        self.snapshot_candidate_histogram(self.ordered_indices)
         if self._full_loader is None:
             self._full_loader = DataLoader(
                 self.indexed_dataset,
@@ -131,6 +144,27 @@ class FixedCurriculum:
             return self.ordered_indices
         return self.ordered_indices[:epoch_size]
 
+    def snapshot_candidate_histogram(self, candidate_indices: torch.Tensor = None):
+        if candidate_indices is None:
+            candidate_indices = self._current_candidate_indices()
+
+        candidate_indices = candidate_indices.long()
+        candidate_count = int(candidate_indices.numel())
+        class_counts = []
+        if self.class_labels is not None:
+            candidate_labels = self.class_labels[candidate_indices]
+            counts_tensor = torch.bincount(candidate_labels, minlength=self.num_classes)[:self.num_classes]
+            class_counts = [int(count.item()) for count in counts_tensor.cpu()]
+
+        snapshot = {
+            "global_batch": int(self.global_batch),
+            "candidate_size": candidate_count,
+            "curriculum_finished": bool(self.curriculum_finished),
+            "class_counts": class_counts,
+        }
+        self.last_candidate_histogram = snapshot
+        return snapshot
+
     def sample_batch(self, batch_size: int):
         """
         Sample one training batch using the current global-batch curriculum state.
@@ -144,6 +178,7 @@ class FixedCurriculum:
         candidate_count = int(candidate_indices.numel())
         if candidate_count <= 0:
             raise RuntimeError("No candidate samples available for fixed curriculum batch sampling.")
+        self.snapshot_candidate_histogram(candidate_indices)
 
         pick_count = min(batch_size, candidate_count)
         selected_positions = torch.randperm(candidate_count)[:pick_count]

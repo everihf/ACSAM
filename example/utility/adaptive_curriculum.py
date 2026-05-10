@@ -121,6 +121,7 @@ class AdaptiveCurriculum:
         self.curriculum_finished = False
         self._full_loader = None
         self._initialized = False
+        self.last_candidate_histogram = None
 
     def initialize(self, batch_size, num_workers, pin_memory, model=None):
         if self._initialized:
@@ -184,6 +185,7 @@ class AdaptiveCurriculum:
             self.curriculum_finished = True
             return self.build_full_dataloader(batch_size, num_workers, pin_memory)
 
+        self.snapshot_candidate_histogram(selected_indices)
         dataset = Subset(self.indexed_dataset, selected_indices.cpu())
         return DataLoader(
             dataset,
@@ -194,6 +196,8 @@ class AdaptiveCurriculum:
         )
 
     def build_full_dataloader(self, batch_size, num_workers, pin_memory):
+        full_indices = torch.arange(self.data_size, device=self.device)
+        self.snapshot_candidate_histogram(full_indices)
         if self._full_loader is None:
             self._full_loader = DataLoader(
                 self.indexed_dataset,
@@ -225,6 +229,26 @@ class AdaptiveCurriculum:
         if self.curriculum_type == "anti":
             ordered_indices = torch.flip(ordered_indices, dims=[0])
         return ordered_indices[:epoch_size]
+
+    def snapshot_candidate_histogram(self, candidate_indices: torch.Tensor = None):
+        if candidate_indices is None:
+            candidate_indices = self._current_candidate_indices()
+
+        candidate_count = int(candidate_indices.numel())
+        class_counts = []
+        if self.class_labels is not None:
+            candidate_labels = self.class_labels[candidate_indices.to(self.class_labels.device).long()]
+            counts_tensor = torch.bincount(candidate_labels, minlength=self.num_classes)[:self.num_classes]
+            class_counts = [int(count.item()) for count in counts_tensor.cpu()]
+
+        snapshot = {
+            "global_batch": int(self.global_batch),
+            "candidate_size": candidate_count,
+            "curriculum_finished": bool(self.curriculum_finished),
+            "class_counts": class_counts,
+        }
+        self.last_candidate_histogram = snapshot
+        return snapshot
 
     def _balance_order_by_class(self, ordered_indices: torch.Tensor) -> torch.Tensor:
         if self.class_labels is None:
@@ -271,6 +295,7 @@ class AdaptiveCurriculum:
         candidate_count = int(candidate_indices.numel())
         if candidate_count <= 0:
             raise RuntimeError("No candidate samples available for adaptive curriculum batch sampling.")
+        self.snapshot_candidate_histogram(candidate_indices)
 
         pick_count = min(batch_size, candidate_count)
         selected_positions = torch.randperm(candidate_count, device=candidate_indices.device)[:pick_count]

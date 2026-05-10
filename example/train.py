@@ -149,6 +149,88 @@ def apply_dataset_specific_inception_svm_defaults(args, parser, cli_provided_des
     return applied
 
 
+def class_count_field_name(class_name):
+    cleaned = "".join(
+        char.lower() if char.isalnum() else "_"
+        for char in str(class_name).strip()
+    )
+    cleaned = "_".join(part for part in cleaned.split("_") if part)
+    return f"count_{cleaned or 'class'}"
+
+
+def class_histogram_fieldnames(class_names):
+    return [
+        "run_name",
+        "method",
+        "epoch",
+        "epoch_batch",
+        "cumulative_batches_before",
+        "global_batch_before",
+        "curriculum_strategy",
+        "curriculum_type",
+        "balance_order",
+        "candidate_size",
+        "curriculum_finished",
+        *[class_count_field_name(class_name) for class_name in class_names],
+    ]
+
+
+def full_dataset_histogram_snapshot(train_dataset, num_classes):
+    labels = getattr(train_dataset, "targets", None)
+    class_counts = []
+    if labels is not None:
+        labels_tensor = torch.as_tensor(list(labels), dtype=torch.long)
+        counts_tensor = torch.bincount(labels_tensor, minlength=num_classes)[:num_classes]
+        class_counts = [int(count.item()) for count in counts_tensor]
+
+    return {
+        "candidate_size": len(train_dataset),
+        "curriculum_finished": True,
+        "class_counts": class_counts,
+    }
+
+
+def write_class_histogram_row(
+    csv_path,
+    fieldnames,
+    class_names,
+    snapshot,
+    run_name,
+    method_name,
+    epoch,
+    epoch_batch,
+    cumulative_batches_before,
+    global_batch_before,
+    curriculum_strategy,
+    curriculum_type,
+    balance_order,
+):
+    if csv_path is None or snapshot is None:
+        return
+
+    class_counts = list(snapshot.get("class_counts") or [])
+    row = {
+        "run_name": run_name,
+        "method": method_name,
+        "epoch": epoch,
+        "epoch_batch": epoch_batch,
+        "cumulative_batches_before": cumulative_batches_before,
+        "global_batch_before": global_batch_before,
+        "curriculum_strategy": curriculum_strategy,
+        "curriculum_type": curriculum_type,
+        "balance_order": bool(balance_order),
+        "candidate_size": int(snapshot.get("candidate_size", sum(class_counts))),
+        "curriculum_finished": bool(snapshot.get("curriculum_finished", False)),
+    }
+    for class_idx, class_name in enumerate(class_names):
+        field_name = class_count_field_name(class_name)
+        row[field_name] = class_counts[class_idx] if class_idx < len(class_counts) else ""
+
+    with csv_path.open("a", newline="", encoding="utf-8") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writerow(row)
+
+
 def build_model(args, model_name, num_classes):
     if model_name == "wrn":
         return WideResNet(
@@ -464,6 +546,7 @@ if __name__ == "__main__":
     parser.add_argument("--fixed_inception_svm_cache", default=True, type=parse_bool, help="Whether to cache inception features and SVM scores for inception_svm ordering.")
     # metrics
     parser.add_argument("--metrics_dir", default="metrics", type=str, help="Directory (relative to example/) used to save validation metrics and plots.")
+    parser.add_argument("--record_class_histogram", default=False, type=parse_bool, help="Whether to save per-batch curriculum candidate-pool class histograms.")
     parser.add_argument("--run_name", default="", type=str, help="可选运行名称，用于指标文件名。如果为空，则自动生成：时间戳+seed。")
     parser.add_argument("--method_name", default="", type=str, help="方法标签已保存到指标CSV文件中，以便后续多轮比较.")
     parser.add_argument("--checkpoint_dir", default="checkpoints", type=str, help="Directory (relative to example/) used to save model checkpoints.")
@@ -754,6 +837,7 @@ if __name__ == "__main__":
                 num_workers=args.num_workers,
                 pin_memory=True,
             )
+        fixed_balance_enabled = False
         if args.fixed_balance_order:
             train_targets = getattr(dataset.train.dataset, "targets", None)
             if train_targets is not None:
@@ -762,6 +846,7 @@ if __name__ == "__main__":
                     labels=list(train_targets),
                     num_classes=len(dataset.classes),
                 )
+                fixed_balance_enabled = True
             else:
                 logger.warning("Train dataset has no 'targets' attribute; skip fixed curriculum class balancing.")
 
@@ -773,6 +858,7 @@ if __name__ == "__main__":
                 increase_amount=args.fixed_increase_amount,
                 starting_percent=args.fixed_starting_percent,
                 curriculum_type=args.fixed_curriculum_type,
+                use_balance_order=fixed_balance_enabled,
             ),
         )
         curriculum.initialize(
@@ -826,6 +912,21 @@ if __name__ == "__main__":
     method_name = args.method_name or default_method_name#如果 args.method_name 有值 → 用它  ,否则 → 用 default_method_name
     csv_path = metrics_dir / f"{run_name}_val_curve.csv"
     plot_path = metrics_dir / f"{run_name}_val_curve.png"
+    class_histogram_path = None
+    class_histogram_fields = None
+    full_dataset_histogram = None
+    if args.record_class_histogram:
+        class_histogram_path = metrics_dir / f"{run_name}_class_histogram.csv"
+        class_histogram_fields = class_histogram_fieldnames(dataset.classes)
+        with class_histogram_path.open("w", newline="", encoding="utf-8") as histogram_file:
+            writer = csv.DictWriter(histogram_file, fieldnames=class_histogram_fields)
+            writer.writeheader()
+        if curriculum is None:
+            full_dataset_histogram = full_dataset_histogram_snapshot(
+                train_dataset=dataset.train.dataset,
+                num_classes=len(dataset.classes),
+            )
+        logger.info("Recording class histogram data to %s", class_histogram_path)
     best_val_accuracy = float("-inf")
     best_epoch = -1
     curriculum_finished_epoch = None
@@ -920,6 +1021,35 @@ if __name__ == "__main__":
             else:
                 inputs, targets = (b.to(device) for b in batch)
                 indices = None
+
+            if class_histogram_path is not None:
+                if curriculum is not None:
+                    histogram_snapshot = getattr(curriculum, "last_candidate_histogram", None)
+                    if histogram_snapshot is None and hasattr(curriculum, "snapshot_candidate_histogram"):
+                        histogram_snapshot = curriculum.snapshot_candidate_histogram()
+                    histogram_curriculum_type = getattr(curriculum, "curriculum_type", "")
+                    histogram_balance_order = getattr(curriculum, "use_balance_order", False)
+                    histogram_global_batch = getattr(curriculum, "global_batch", cumulative_batches)
+                else:
+                    histogram_snapshot = full_dataset_histogram
+                    histogram_curriculum_type = ""
+                    histogram_balance_order = False
+                    histogram_global_batch = cumulative_batches
+                write_class_histogram_row(
+                    csv_path=class_histogram_path,
+                    fieldnames=class_histogram_fields,
+                    class_names=dataset.classes,
+                    snapshot=histogram_snapshot,
+                    run_name=run_name,
+                    method_name=method_name,
+                    epoch=epoch + 1,
+                    epoch_batch=epoch_batches + 1,
+                    cumulative_batches_before=cumulative_batches,
+                    global_batch_before=histogram_global_batch,
+                    curriculum_strategy=curriculum_strategy,
+                    curriculum_type=histogram_curriculum_type,
+                    balance_order=histogram_balance_order,
+                )
 
             if args.optimizer == "sam":
                 ### first forward-backward step
@@ -1058,6 +1188,8 @@ if __name__ == "__main__":
 
     log.flush()#打印/冲洗 log
     logger.info("Saved validation curve data to %s", csv_path)
+    if class_histogram_path is not None:
+        logger.info("Saved class histogram data to %s", class_histogram_path)
 
     total_training_seconds = (
         datetime.now(ZoneInfo("Asia/Shanghai")) - train_start_time
@@ -1093,4 +1225,3 @@ if __name__ == "__main__":
             logger.exception("Failed to save validation curve plot to %s", plot_path)
     else:
         logger.warning("matplotlib is not available; skipped saving validation curve plot.")
-
